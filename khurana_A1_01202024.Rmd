@@ -1,0 +1,142 @@
+---
+title: "A1: Campus mandate" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
+---
+
+## Task 
+
+**Assignment** Propose and simulate a data-generating process in which (i) students who live on campus in their freshman year tend to have better outcomes, but at the same time (ii) the causal effect of living on campus is negative. 
+
+- Up to you... whether you'd like to have the causal effect be negative for all students, or positive for those who do select into living on campus and negative for those who do not&mdash;this would actually make sense in a model where students selected into living accommodations with knowledge of what suited them best.
+    * Maybe allow for heterogeneous treatment effects if you have time? We will talk about heterogeneous treatment effects, so having a DGP at the ready would be useful.
+- Complete this task in a markdown file and make the argument that's relevant to the policy makers visually (e.g., likely something that starts with `ggplot`). 
+
+
+Let's model this as an OVB problem, where the true relationship is captured in some $y = f(x_{1}, x_{2}, T),$ where $T_i=1$ if student $i$ lives on campus, and is zero otherwise. The range of $y$ should make sense to the audience&mdash;I'll leave it to you to decide what to do about that. (Maybe make $x_1$ continuous and $x_2$ discrete, just to have the potential for both?) 
+
+In order to introduce the potential for non-random treatment (i.e., on-campus living) let's assume that the linear combination $Z = 1 + a_1x_1 + a_2x_2$ determines the probability each individual lives on campus, such that $$Pr[T=1] = \frac{1}{1+e^{-Z}}~.$$ In that way, $\{a_1, a_2\} > 0$ will imply that "better" students live on-campus, on average&mdash;positive selection into treatment. (_While there are many reasonable ways to model this, we'll see some good intuition unfold following this setup._) 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      error = FALSE)
+```
+
+## Negative treatment effect for all
+
+```{r load libraries}
+library(tidyverse)
+library(modelsummary)
+library(patchwork)
+```
+
+### DGP
+
+``` {r dgp, echo=T}
+# DGP here?
+
+# negative causal effect of living on campus: -0.5
+
+dgp_negative <- map(1:100, ~ {
+  set.seed(.x)
+  
+  tibble(
+    # normally-distributed random continuous variable that affects gpa, such as the standardized SAT score
+    x_1 = rnorm(100),
+    
+    # uniformly-distributed random discrete variable that affects gpa, such as low-risk for alcohol
+    x_2 = sample(c(1, 0), 100, replace = TRUE),
+    
+    # a random composite variable that affects the probability of living on campus
+    z = 1 + x_1 + x_2,
+    
+    # and scale z so we get a good coverage of t
+    z_scale = scale(z),
+    
+    # probability of living on campus, as a logistic function
+    t = 1 / (1 + exp(-z_scale)),
+    
+    # transforming probability into a binary variable with balanced sample
+    
+    t_binary = ifelse(t > median(t), 1, 0),
+    # add random noise
+    
+    e = rnorm(100, mean = 0, sd = 0.2),
+    
+    #outcome as a function of x_1, x_2, and t - adding a constant so that the range of gpa makes sense
+    # scaling x_1 + x_2 so that the mean GPA is 3 with a standard deviation of 0.6
+    # the effect of living on campus is -0.5
+    y = ((x_1 + x_2 - mean(x_1 + x_2)) * 0.6) / sd(x_1 + x_2) + 3.3 - 0.5 *
+      t_binary + e
+  ) |>
+    mutate(#ensuring that the re-scaled variable doesn't exceed 4.3
+      y = ifelse(y > 4.3, 4.3, y))
+})
+```
+
+
+``` {r choose_iteration, echo=T}
+# finding an iteration where students who live on campus in their freshman year tend to have better outcomes, but at the same time (ii) the estimated causal effect of living on campus is negative
+
+max_positive_iter <- map_dbl(dgp_negative, ~ coefficients(lm(y ~ factor(t_binary), data = .x))[2]) |>
+  which.max()
+
+# isolate the max_iter dataframe
+dgp_max_positive <- dgp_negative[[max_positive_iter]]
+```
+
+## Positive treatment effect for students who select into treatment - think more.
+
+### DGP
+
+``` {r dgp-positive, echo=T}
+# DGP here?
+
+# Positive treatment effect for students who select into treatment
+
+dgp_positive <- map(1:100, ~ {
+  set.seed(.x)
+  
+  tibble(
+    # normally-distributed random continuous variable that affects gpa, such as the standardized SAT score
+    x_1 = rnorm(100),
+    
+    # uniformly-distributed random discrete variable that affects gpa, such as low-risk for alcohol
+    x_2 = sample(c(1, 0), 100, replace = TRUE),
+    
+    # a random composite variable that affects the probability of living on campus
+    z = 1 + x_1 + x_2,
+    
+    # and scale z so we get a good coverage of t
+    z_scale = scale(z),
+    
+    # probability of living on campus, as a logistic function
+    t = 1 / (1 + exp(-z_scale)),
+    
+    # transforming probability into a binary variable with balanced sample
+    
+    t_binary = ifelse(t > median(t), 1, 0),
+    # add random noise
+    
+    e = rnorm(100, mean = 0, sd = 0.2),
+    
+    #outcome as a function of x_1, x_2, and t - adding a constant so that the range of gpa makes sense
+    # scaling x_1 + x_2 so that the mean GPA is 3 with a standard deviation of 0.6
+    # the effect of living on campus is -0.5
+    y = ((x_1 + x_2 - mean(x_1 + x_2)) * 0.6) / sd(x_1 + x_2) + 3.3 - 0.5 *
+      t_binary + e
+  ) |>
+    mutate(#ensuring that the re-scaled variable doesn't exceed 4.3
+      y = ifelse(y > 4.3, 4.3, y))
+})
+```
+
+
