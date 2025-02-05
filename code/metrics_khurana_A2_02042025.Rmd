@@ -1,0 +1,217 @@
+---
+title: "A2: on Own" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
+---
+
+## Task 
+
+**Part 1.** Stay small, but... work up something on your own that demonstrates something through the use of a simulation:a repeated-iterations simulation, yes. I would really like you to come up with something on your own, but a good example of a puzzle-y little environment could be this:
+
+*In this assignment, I am exploring how the point-estimate and the standard error estimates change if there is more variation in the treatment group than the control group. To test for change, I have specified 4 condition for treatment group variation (while keeping the DGP variance similar) and 3 condition for the sample size. I ran 200 iteration for each combination.*
+
+## **The DGP:**
+
+```{r}
+library(tidyverse)
+library(broom)
+library(janitor)
+library(ggridges)
+```
+
+
+I want a DGP where the treated group has more variation that control group, keeping the overall DGP variation constant. To retain the total variance in DGP, use the relationship that -
+
+$var_{n_1+n_2}^2 = \frac{(n_1-1)*var^2_{n_1} + (n_2 - 1)*var^2_{n_2}}{n_1 + n_2 - 2}$
+
+
+*Priors:* 
+
+The estimate of beta will not change but the SE become larger as the variation in treatment groups (or one of the groups) become bigger compared to the other.
+
+```{r}
+get_var <- function(base_sd = 2, #measure of overall variance in the DGP
+                    control_sd,
+                    sample_n = 100) {
+  # set equal control and treatment sizes
+  control_n <- sample_n / 2
+  treatment_n <- sample_n / 2
+  
+  # find treatment variance using formula
+  treatment_var <- ((base_sd ^ 2) * (control_n + treatment_n - 2) -(control_n - 1) *control_sd ^ 2)/(treatment_n - 1)
+  
+  # take sqrt to get sd
+  treatment_sd <- sqrt(treatment_var)
+  
+  # return sd
+  return(treatment_sd)
+}
+```
+
+
+```{r}
+sample_size <- c(50, 100, 500)
+control_sd <- c(2, 1.5, 1, 0.5)
+iter <- 200
+iter_matrix <- expand.grid(1:iter, control_sd, sample_size) %>%
+  rename("seed" = "Var1",
+         "control_sd" = "Var2",
+         "sample_n" = "Var3") %>%
+  rowwise() %>%
+  mutate(treatment_sd = get_var(control_sd = control_sd, sample_n = sample_n)) %>%
+  ungroup() %>%
+  mutate(
+    note = paste0("Treat SD = ", round(treatment_sd, 2))
+  )
+
+# list of dgps
+dgp_diff_var_list <- pmap(list(iter_matrix$seed,
+                          iter_matrix$control_sd,
+                          iter_matrix$treatment_sd,
+                          iter_matrix$sample_n), ~ {
+  set.seed(..1)
+  
+  tibble(
+  # first half people get treatment and other half don't
+  t = c(rep(1, ..4/2), rep(0, ..4/2)),
+  # random error
+  e = rnorm(n = ..4, sd = 0.5),
+  # if y would have got treatment, then it's outcome from the distribution with more variance
+  y_treat = rnorm(n = ..4, sd = ..3),
+  # if y were in control, it's outcome from a distribution with less variance
+  y_control = rnorm(n = ..4, sd = ..2),
+  
+  # making y outcome
+  y = ifelse(t == 1, y_treat + 1 + e, y_control + e)
+  )
+}
+)
+```
+
+**Part 2:** Informative visualizations?
+
+There seems to be a difference in average outcome, especially across small sample size.
+
+```{r, out.width="100%"}
+# let's plot the data for a random seed across multiple conditions
+df_seed1_index <- which(iter_matrix$seed == 1)
+df_seed1 <- map_dfr(df_seed1_index, ~dgp_diff_var_list[[.x]] %>%
+                      cbind(iter_matrix[.x,]))
+
+df_seed1 %>%
+  ggplot(aes(x = factor(t), y = y, color = factor(t))) +
+  geom_jitter(alpha = 0.2, width = 0.3) +
+  geom_boxplot(width = 0.5, fill = "gray80")+
+  facet_grid(note~factor(sample_n)) +
+  scale_color_manual(
+    values = RColorBrewer::brewer.pal(n = 2, "Dark2")
+  ) +
+  labs(
+    x = "Group",
+    y = "Relevant Outcome",
+    color = ""
+  ) +
+  theme_minimal()
+```
+
+
+## **Verify DGPs have the similar variance**
+
+```{r}
+iter_matrix$dgp_var <- map_dbl(dgp_diff_var_list, ~var(.x$y))
+
+ggplot(data = iter_matrix, 
+       aes(x = dgp_var, y = fct_rev(note), fill = note)) +
+  geom_density_ridges(alpha = 0.7, show.legend = F) +
+  facet_wrap(~factor(sample_n))+
+  #scale_y_discrete(labels = str_wrap(unique(iter_matrix$note), 15)) +
+  theme_minimal() +
+  labs(
+    x = "Variance of Y",
+    y = "Condition",
+    title = "Distribution of Variance in Y Across Samples with different N and SD",
+    subtitle = "Fairly same."
+  ) +
+  scale_fill_manual(
+    values = RColorBrewer::brewer.pal(4, "Pastel2")
+  )
+```
+
+**Part 3:** Simulation results?
+
+**The simulation:**
+
+```{r}
+iter_matrix <- iter_matrix %>%
+  cbind(map_df(dgp_diff_var_list,
+               ~lm(y ~ t, data = .x) %>%
+                 tidy() %>%
+                 filter(term == "t"))) %>%
+  clean_names()
+```
+
+**Visualization of the result:**
+
+```{r}
+line_plot <- function(y_title, statistic){
+ plot <- iter_matrix %>%
+  group_by(note, sample_n) %>%
+  summarize(
+    mean = mean({{statistic}}),
+    q2.5 = quantile({{statistic}}, 0.025),
+    q97.5 = quantile({{statistic}}, 0.975),
+    ) %>%
+  ungroup() %>%
+  ggplot(aes(x = factor(sample_n), color = note)) +
+  #geom_hline(aes(yintercept = 1), linetype = "dashed", color = "black") +
+  geom_errorbar(aes(ymin = q2.5, y = mean, ymax = q97.5), width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  geom_point(aes(y = mean), size = 2,
+              position = position_dodge(width = 0.5)) +
+  labs(
+    x = "Sample size",
+    y = y_title,
+    color = "",
+    caption = "Error bars represents 95% of the y-distribution across samples."
+  ) +
+  theme_minimal() +
+  scale_color_manual(
+    values = RColorBrewer::brewer.pal(4, "Dark2")
+  )
+ 
+ return(plot)
+}
+```
+
+```{r}
+line_plot(y_title = "Estimate of treatment effect",
+          estimate) +
+  geom_hline(aes(yintercept = 1),
+             linetype = "dashed",
+             color = "black")
+
+line_plot(y_title = "Estimate of std_error",
+          std_error)
+
+line_plot(y_title = "Estimate of t-statistic",
+          statistic)
+
+line_plot(y_title = "Estimate of p-value",
+          p_value) +
+  geom_hline(aes(yintercept = 0.05),
+             linetype = "dashed",
+             color = "black")
+```
+
+
+**Part 4.** Summary/takeaway?
+
+- Across sample sizes and treatment SD, the estimate of treatment effect looks similar.
+- Within each sample size, the 95% around the estimates of standard error are wider when treatment SD is higher, however, the average standard error is about the same. For the 95% distribution around the t-values, it seems about the same, however, the 95% distribution around p-values look wider with a higher treatment sd.
+- The problem in differences in variance between control and treatment group seems to be mitigated with a larger sample. 

@@ -41,8 +41,6 @@ library(patchwork)
 ### DGP
 
 ``` {r dgp, echo=T}
-# DGP here?
-
 # negative causal effect of living on campus: -0.5
 
 dgp_negative <- map(1:100, ~ {
@@ -93,50 +91,98 @@ max_positive_iter <- map_dbl(dgp_negative, ~ coefficients(lm(y ~ factor(t_binary
 dgp_max_positive <- dgp_negative[[max_positive_iter]]
 ```
 
-## Positive treatment effect for students who select into treatment - think more.
+### Descriptives
 
-### DGP
+```{r}
+gpa_plot <- ggplot(dgp_max_positive,
+         aes(x = factor(t_binary), y = y)) +
+  geom_boxplot(fill = "transparent") +
+  geom_jitter(color = "cornflowerblue",  width = 0.1) +
+  stat_summary(
+    aes(group = factor(t_binary), label =  round(..y.., 1)),
+    fun = "median", geom = "label", color = "grey20", vjust = -0.3
+  )+
+  scale_x_discrete(labels = c("No", "Yes")) +
+  theme_minimal()+
+  labs(
+    x = "On-campus Living in Freshmen year?",
+    y = "GPA",
+  ) +
+  theme(
+    panel.grid.minor = element_blank(),
+    plot.background = element_rect(fill = "gray96", color = "transparent")
+  )
 
-``` {r dgp-positive, echo=T}
-# DGP here?
+x1_plot <- ggplot(dgp_max_positive,
+         aes(x = factor(t_binary), y = (x_1*50 + 1200))) +
+  geom_boxplot(fill = "transparent") +
+  geom_jitter(color = "cornflowerblue",  width = 0.1, size = 0.5) +
+  stat_summary(
+    aes(group = factor(t_binary), label =  round(..y..)),
+    fun = "median", geom = "label", color = "grey20", vjust = -0.3, size = 2
+  )+
+  scale_x_discrete(labels = c("No", "Yes")) +
+  theme_minimal()+
+  labs(
+    #x = "Lived on-campus in Freshmen year?",
+    y = "x_1\n(SAT scores)",
+  ) +
+  theme(
+    axis.title.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_rect(fill = "gray96", color = "transparent")
+  )
 
-# Positive treatment effect for students who select into treatment
+x2_plot <- ggplot(filter(dgp_max_positive, x_2 == 0),
+         aes(x = factor(t_binary))) +
+  geom_bar(fill = "darkorange") +
+  scale_x_discrete(labels = c("No", "Yes")) +
+  theme_minimal()+
+  labs(
+    x = "On-campus Living?",
+    y = "#Count of x_2\n(High-risk for alcohol-addiction)",
+  ) +
+  theme(
+    panel.grid.minor = element_blank(),
+    plot.background = element_rect(fill = "gray96", color = "transparent")
+  )
+```
 
-dgp_positive <- map(1:100, ~ {
-  set.seed(.x)
-  
-  tibble(
-    # normally-distributed random continuous variable that affects gpa, such as the standardized SAT score
-    x_1 = rnorm(100),
-    
-    # uniformly-distributed random discrete variable that affects gpa, such as low-risk for alcohol
-    x_2 = sample(c(1, 0), 100, replace = TRUE),
-    
-    # a random composite variable that affects the probability of living on campus
-    z = 1 + x_1 + x_2,
-    
-    # and scale z so we get a good coverage of t
-    z_scale = scale(z),
-    
-    # probability of living on campus, as a logistic function
-    t = 1 / (1 + exp(-z_scale)),
-    
-    # transforming probability into a binary variable with balanced sample
-    
-    t_binary = ifelse(t > median(t), 1, 0),
-    # add random noise
-    
-    e = rnorm(100, mean = 0, sd = 0.2),
-    
-    #outcome as a function of x_1, x_2, and t - adding a constant so that the range of gpa makes sense
-    # scaling x_1 + x_2 so that the mean GPA is 3 with a standard deviation of 0.6
-    # the effect of living on campus is -0.5
-    y = ((x_1 + x_2 - mean(x_1 + x_2)) * 0.6) / sd(x_1 + x_2) + 3.3 - 0.5 *
-      t_binary + e
-  ) |>
-    mutate(#ensuring that the re-scaled variable doesn't exceed 4.3
-      y = ifelse(y > 4.3, 4.3, y))
-})
+```{r}
+gpa_plot + (x1_plot / x2_plot) +
+  plot_layout(widths = c(2, 1)) +
+  plot_annotation(
+    title = "Positive Selection into Living On-Campus",
+    subtitle = str_wrap("Students living on campus have higher undergraduate GPAs than students living off-camppus, BUT they also have higher SAT scores and a lower likelihood of alcohol addiction"),
+    caption = "Number represents medians.\nSimulated data with positive selection into treatment and negative treatment effect."
+  ) &
+  theme(
+      plot.background = element_rect(fill = "gray96", color = "transparent")
+  )
+```
+
+### Regression analysis
+
+```{r}
+# model the problem? communicate results?
+
+model_binary <- lm(y ~ t_binary, 
+                   data = dgp_max_positive)
+
+model_multi <- lm(y ~ t_binary + x_1 + x_2, 
+                   data = dgp_max_positive)
+
+modelsummary(
+  list(model_binary, model_multi),
+  stars = TRUE,
+  coef_rename = c(t_binary = "Lived on-campus",
+                  x_1 = "Standardized SAT scores",
+                  x_2 = "Low risk of alcohol-addiction"),
+  gof_omit = "AIC|BIC|R2 |Log.|RMSE",
+  title = "Relationship between Undergrad GPA and Living On-Campus",
+  notes = "Positive estimate of living on-campus turns negative after adjusting for SAT scores and alcohol-addiction risk."
+)
 ```
 
 
+Positive estimate of living on-campus turns negative after adjusting for SAT scores and alcohol-addiction risk.
