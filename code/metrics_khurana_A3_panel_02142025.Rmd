@@ -1,0 +1,164 @@
+
+## A3 - Panel simulation / DiD
+
+---
+
+``` {r, echo=F}
+due_share       = 11
+due_lastcall    = 13
+due_final       = 14
+dueth_share     = scales::ordinal(due_share)
+dueth_lastcall  = scales::ordinal(due_lastcall)
+dueth_final     = scales::ordinal(due_final)
+```
+
+> Due dates: `r due_share` February (share screens in class), `r due_lastcall` February (last call), `r due_final` February (submissions due)
+
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+**Part 1.** Code up a DGP in which there are $n_t$ observations of $n_i$ individual economic agents (_i.e._, an $n_i \times n_t$ panel). Within this panel, allow some but not all $i$ to be treated. For now, assume that treatment falls in the middle of the time series, at the same $t$ for each treated unit&mdash;once treatment arrives, let's have treatment stay on for the rest of the time series (for now, anyway). Likewise, have all $i$ trend similarly through the time series. (_You should recognize that this is all sounding fairly well behaved&mdash;the sort of environment in which we would expect to be able to identify the causal parameter._) Here's the twist. As part of this DGP, I don't want you to hardwire $i$ specific trends to be common&mdash;instead, have each cross-sectional unit draw their trend from a $N(0,\sigma)$ distribution. In this way, we would expect that they would be trending similarly on average, but we could questions this somewhat. (_Hence, parameterize the variance so you can consider its role._)
+
+<br>
+
+**The DGP:**
+
+``` {r, echo=T, eval=T}
+# Have a crack at this... I can help as we go.
+
+set.seed(1)
+#setting time and individual parameters
+n_t <- 10
+n_i <- 1000
+n_c <- 40
+
+cross <- tibble(
+    i = 1:n_i,
+    # assignment to treatment
+    x = rep(0:1, each = n_i/2),
+    # cluster in which y belongs
+    c = sample(1:n_c,size = n_i, replace = T),
+    # length of the panel
+    t_length = n_t,
+    # individual-level error term
+    ei = rnorm(length(1:n_i), 0, 1)
+)
+
+cluster <- tibble(
+    c = 1:n_c,
+    # cluster-level variable
+    cx = rnorm(n_c),
+    # cluster-level error term
+    ec = rnorm(length(1:n_c), 0, 1)
+)
+
+year <- tibble(
+    t = 1:n_t,
+    # year-level error term
+    et = rnorm(length(1:n_t), 0, 1)
+)
+
+# setting parameters
+# effect of treatment
+beta_x = 0
+# effect of treated period
+beta_tr = 0
+# heterogeneous effect of treatment in treated period
+beta_xtr = 1
+# effect of time/year - linear
+beta_t = 0
+# heterogeneous effect of time in treated period
+beta_ttr = 0
+# effect of cluster-level variable
+beta_cx = 0
+
+panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
+  left_join(cluster, by = "c") %>%
+  left_join(year, by = "t") %>%
+  mutate(
+    eit = rnorm(length(1:(n_i*n_t)), 0, 1),
+    tr = ifelse(t>=n_t/2, 1, 0),
+    xtr = x*tr,
+    y = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + beta_cx*cx + et + eit + ec
+  )
+    
+```
+
+<br><br>
+
+---
+
+**Part 2:** Plot a representative iteration of the above DGP, clearly demonstrating (i) where treatment falls and (ii) which observations are part of the treatment group and which are part of the control groups. (_I'm asking for the classic DiD plot, showing trends across time and any level shift induced by treatment._)
+
+``` {r, echo=T}
+# Code chunk here...
+
+panel %>%
+  group_by(t, x) %>%
+  summarize(
+    mean_y = mean(y)
+  ) %>%
+ungroup() %>%
+ggplot(aes(x = t, y = mean_y, shape = factor(x))) +
+  geom_line(aes(color = factor(x)))+
+  # geom_line(aes(color = t < 6,linetype = factor(x))) +
+  # geom_line(aes(color = t > 4, linetype = factor(x))) +
+  geom_point() +
+  #scale_color_manual(values = c("transparent", "cornflowerblue")) +
+  scale_y_continuous(limits = c(0, 20)) +
+  scale_x_continuous(breaks = 1:10)+
+  geom_vline(aes(xintercept = 5), color = "darkred", linetype = "dotted")+
+  theme_minimal() +
+  labs(
+    x = "Time point",
+    y = "Mean Outcome",
+    color = "Treatment group"
+  ) +
+  guides(shape = "none")
+
+  
+```
+
+<br><br>
+
+---
+
+**Part 3.** Simulate this DGP, demonstrating that the distribution of $\hat\beta$ across 500 iterations of your DGP well captures the true $\beta=1$, given the estimating equation, $$Y_{it}= \alpha_0 + \alpha_1~X_i + \alpha_2~T_t + \beta~X_iT_t + e_{it}~.$$
+
+**The simulation:**
+
+``` {r, echo=T}
+# Code chunk here...
+```
+
+<br><br>
+
+**Visualization of the result:**
+
+Where $$Y_{it}= \beta_0 + \beta_1X_i + \beta_2T_t + \beta_3X_iT_t + e_{it}~,$$and true $\beta_3=1$:
+
+``` {r, echo=T}
+# Code chunk here...
+```
+
+<br><br>
+
+---
+
+**Part 4.** Demonstrate the implications of $\sigma$ (i.e., on $\hat\beta_3$ and associated standard-error estimates).
+
+``` {r, echo=T}
+# Code chunk here...
+```
+
+<br>
+
+---
+
+[Glen Waddell](https://glenwaddell.com), `r format(Sys.Date(), "%Y")`
+
+
