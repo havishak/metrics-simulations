@@ -1,0 +1,421 @@
+---
+title: "Measurement Error"
+author: "Havisha Khurana"
+output: 
+    html_document:
+        code_folding: hide
+date: "2024-05-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+
+library(tidyverse)
+library(estimatr)
+library(broom)
+library(modelsummary)
+library(flextable)
+```
+
+## Simulate and Summarize
+
+**Population Regression model -**
+
+`y = ɑ + β x + Ɛ`, where `ɑ = 3` and `β = 4`.
+
+**Two sample sizes - **
+
+30 and 200. 
+
+**Iterations**
+
+1000
+
+*As a reminder, the standard assumptions of an OLS model are -*
+
+-   A1: Linearity: $y = X\beta + \epsilon$
+
+-   A2: Full rank of X
+
+-   A3: Exogeneity: $E[\epsilon|X] = 0$
+
+-   A4: Homoskedasticity and nonautocorrelation: $E[\epsilon\epsilon'|X] = \sigma^2I$
+
+-   A5: Data generation: X may be random or non-random.
+
+-   A6: Normal Distribution of conditional residual: $\epsilon | X$ is multivariate normal
+
+```{r}
+# functions to use for each part
+
+# for each simulated dataset, this function 
+# 1. estimates the linear model with iid se
+# 2. estimates the linear model with heteroskedastic-robust standard error
+# 3. combines them in a table
+# 4. calculate the t-statistic for H0: beta = beta_0
+# This function answers Part 2, subparts 1,2,3.
+model_estimate <- function(iter, df, str_formula, beta0 = 4){
+    ols_iid <- lm_robust(formula = as.formula(str_formula),
+                     data = df,
+                     se_type = "classical") %>%
+        tidy() %>%
+        filter(term %in% c("x", "w"))
+    
+    ols_hetero <- lm_robust(formula = as.formula(str_formula),
+                     data = df,
+                     se_type = "HC2")%>%
+        tidy() %>%
+        filter(term %in% c("x", "w"))
+    
+    model_estimate_df <- rbind(ols_iid, ols_hetero) %>%
+        # identify which type of error
+        mutate(se_type = c("iid", "HC2"),
+        # record of iteration
+               iteration = iter,
+        # save t-stat for beta = 4
+               t_beta0 = (estimate - beta0)/std.error,
+               t_crit = qt(0.975, df = df),
+               reject_0 = ifelse(p.value < 0.05, 1, 0),
+               reject_b0 = ifelse(t_beta0 > t_crit | t_beta0 < -t_crit, 1, 0))
+    
+    return(model_estimate_df)
+}
+
+# Plots
+# This function makes density plots for coeffecient estimates by sample sizes. It answers Part 3 sub-part 1.
+coef_distribution <- function(estimate_df){
+  
+     estimate_df$df <- factor(estimate_df$df,
+                          levels = c(28, 198),
+                          labels = c("30","200"))
+     
+    coef_plot <- ggplot(estimate_df) +
+                    geom_density(aes(x = estimate, fill= df),
+                                 #fill = "cornflowerblue",
+                                 kernel = "epanechnikov", 
+                                 alpha = 0.4)+
+                    geom_vline(xintercept = 4, linetype = "dotted")+
+                    #facet_grid(df)+
+        labs(x = "Estimate of Beta",
+             fill = "Sample Size")+
+        theme_minimal(12)+
+        theme(legend.position = "top")
+    
+    return(coef_plot)
+}
+
+# This function makes density plots for t-stat for H0: beta = 4 estimates by sample sizes and SE type. It answers Part 3 sub-part 2.
+t_distribution <- function(estimate_df){
+    estimate_df$se_type <- factor(estimate_df$se_type,
+                          levels = c("iid", "HC2"),
+                          labels = c("IID SE","HC2 SE"))
+    
+    t_line <- tibble(
+    df = c(28, 198),
+    x_intercept = qt(0.975, df = df))
+    
+    
+    df_labels <- c(
+        `28` = "SS: 30",
+        `198` = "SS: 200"
+    )
+     
+    t_plot <- ggplot(estimate_df) +
+                geom_density(aes(x = t_beta0, fill = se_type),
+                             #fill = "cornflowerblue",
+                             color = NA, kernel = "epanechnikov",
+                             alpha = 0.4, 
+                             show.legend = FALSE)+
+                geom_vline(xintercept = 0, linetype = "solid")+
+                geom_vline(data = t_line, aes(xintercept = x_intercept,
+                                            group = df), linetype = "dotted", color = "coral") +
+                geom_vline(data = t_line, aes(xintercept = -x_intercept,
+                                            group = df), linetype = "dotted", color = "coral") +
+                facet_grid(se_type~df, labeller = labeller(df = df_labels))+
+        labs(x = "t-statistic")+
+        theme_minimal(12)
+    
+    return(t_plot)
+}
+```
+
+### DGP 1
+
+```
+x ~ Uniform(0, 10)
+Ɛ ~ Uniform(-3, 3)
+y = 3 + 4 * x + Ɛ
+```
+
+*0. Describe and explain how OLS "should" perform based upon theory.* 
+
+Based on the standard assumptions, this DGP meets all assumptions except multivariate normality of residuals. However, in big data, due to the Central Limit Theorem, this should not be a problem. Therefore, in both sample sizes, I expect the estimate to be unbiased but there will be higher Type 1 error in the small sample simulation. 
+
+1. Use OLS to estimate the effect of `x` on `y` (i.e., `β`).
+2. Use the "standard" IID-assuming standard error estimator (and the OLS estimates) to conduct a *t* test for `β = 4`. Keep the *t* stat.
+3. Repeat the test but use the het.-robust standard error estimator.
+
+**See code**
+
+```{r}
+# number of simulated data
+n_iter <- 1000
+
+# sample sizes
+sample_size <- c(30, 200)
+
+# keep track of the combinations
+df_index <- expand.grid(1:n_iter, sample_size)
+```
+
+#### Simulate
+
+```{r }
+# dgp for first part
+dgp1 <- map2(df_index$Var1, df_index$Var2, 
+             ~{
+            set.seed(.x)
+            tibble(
+                x = runif(.y, 0, 10),
+                e = runif(.y, -3, 3),
+                y = 3 + 4*x + e,
+                iter = .x)
+                 })
+
+dgp1_estimate <- map_df(dgp1, ~ model_estimate(unique(.x$iter), .x, "y ~ x"))
+```
+
+#### Summarize
+
+```{r }
+coef_distribution(dgp1_estimate)
+t_distribution(dgp1_estimate)
+```
+
+### DGP 2
+
+```
+x ~ Uniform(0, 10)
+Ɛ ~ Uniform(-x, x)
+y = 3 + 4 * x + Ɛ
+```
+
+*0. Describe and explain how OLS "should" perform based upon theory.* 
+
+Based on the standard assumptions, this DGP meets all assumptions except multivariate normality of residuals and homoskedasicity of residual. I expect the estimate to be unbiased in all cases. The heteroskedastic-robust standard errors should drive down the Type 1 error rates for both small and large sample. In big data, given CTL, the non-normality of residuals would not pose a major challenge as well.  
+
+#### Simulate
+
+```{r}
+dgp2 <- map2(df_index$Var1, df_index$Var2, 
+             ~{
+            set.seed(.x)
+            tibble(
+                x = runif(.y, 0, 10),
+                e = runif(.y, -x, x),
+                y = 3 + 4*x + e,
+                iter = .x)})
+
+dgp2_estimate <- map_df(dgp2, ~ model_estimate(unique(.x$iter), .x, "y ~ x"))
+```
+
+#### Summarize
+
+```{r}
+coef_distribution(dgp2_estimate)
+t_distribution(dgp2_estimate)
+```
+
+### DGP 3
+
+```
+x ~ Uniform(0, 10)
+Ɛ ~ Uniform(-3, 3)
+η ~ Uniform(-3, 3)
+w = x + η
+y = 3 + 4 * x + Ɛ
+```
+
+*0. Describe and explain how OLS "should" perform based upon theory.* 
+
+Based on the standard assumptions, this DGP meets all assumptions except multivariate normality of residuals. However, there is classical measurement error in our observed variable, w, which creates artificial correlation between w and e, thus violating the homogeneity assumption. Therefore, in all cases, I expect to have biased estimates of the relationship. In big data, due to the Central Limit Theorem, the non-normality of residuals should resolve the assumption failure; but this will lead to smaller standard errors. Therefore, it is more likely that we would reject beta = 4. 
+
+#### Simulate
+
+```{r}
+dgp3 <- map2(df_index$Var1, df_index$Var2, 
+             ~{
+            set.seed(.x)
+            tibble(
+                x = runif(.y, 0, 10),
+                e = runif(.y, -3, 3),
+                eta = runif(.y, -3, 3),
+                w = x + eta,
+                y = 3 + 4*x + e,
+                iter = .x)})
+```
+
+
+#### Summarize
+
+```{r}
+dgp3_estimate <- map_df(dgp3, ~ model_estimate(unique(.x$iter), .x, "y ~ w"))
+
+coef_distribution(dgp3_estimate)
+t_distribution(dgp3_estimate)
+```
+
+### DGP 4
+
+```
+x ~ Uniform(0, 10)
+Ɛ ~ Uniform(-3, 3)
+η ~ Uniform(-x, x)
+w = x + η
+y = 3 + 4 * x + Ɛ
+```
+*0. Describe and explain how OLS "should" perform based upon theory.* 
+
+Based on the standard assumptions, this DGP violates multivariate normality. Also, there is measurement error in our observed variable, w, which is related to the predictor, x. Thi violates the assumption the homoskedasticity of the residuals and exogeneity assumptions. Therefore, in all cases, I expect to have biased estimates of the relationship. 
+
+
+#### Simulate
+
+```{r}
+dgp4 <- map2(df_index$Var1, df_index$Var2, 
+            ~{
+            set.seed(.x)
+            tibble(
+                x = runif(.y, 0, 10),
+                e = runif(.y, -3, 3),
+                eta = runif(.y, -x, x),
+                w = x + eta,
+                y = 3 + 4*x + e,
+                iter = .x)})
+
+dgp4_estimate <- map_df(dgp4, ~ model_estimate(unique(.x$iter), .x, "y ~ w"))
+```
+
+
+#### Summarize
+
+
+```{r}
+coef_distribution(dgp4_estimate)
+t_distribution(dgp4_estimate)
+```
+
+### DGP 5
+
+```
+x ~ Uniform(0, 10)
+Ɛ ~ Uniform(-3, 3)
+η ~ -2 * x + Uniform(-x, x)
+w = x + η
+y = 3 + 4 * x + Ɛ
+```
+
+*0. Describe and explain how OLS "should" perform based upon theory.* 
+
+Based on the standard assumptions, this DGP meets violates multivariate normality of residuals, homoskedasticity of residuals, and exogeneity assumption $E(\epsilon | X) = 0$. Therefore, in all cases, I expect to have biased estimates of the relationship. 
+
+#### Simulate
+
+```{r}
+dgp5 <- map2(df_index$Var1, df_index$Var2, 
+             ~{
+            set.seed(.x)
+            tibble(
+                x = runif(.y, 0, 10),
+                e = runif(.y, -3, 3),
+                eta = -2*x + runif(.y, -x, x),
+                w = x + eta,
+                y = 3 + 4*x + e,
+                iter = .x)})
+
+dgp5_estimate <- map_df(dgp5, ~ model_estimate(unique(.x$iter), .x, "y ~ w"))
+```
+
+
+#### Summarize
+
+```{r}
+coef_distribution(dgp5_estimate)
+t_distribution(dgp5_estimate)
+```
+
+**0,** Make a nice table. Also, include in the table the share of the *t* tests that reject the true value of `β`.
+
+```{r}
+table_summary <- map2_df(list(dgp1_estimate, dgp2_estimate, dgp3_estimate, dgp4_estimate, dgp5_estimate),
+                      c(1:5),
+                     ~.x %>%
+                         group_by(se_type, df) %>%
+                         summarize(
+                             estimate_mean = mean(estimate),
+                             estimate_p2 = quantile(estimate, 0.025),
+                             estimate_p97 = quantile(estimate, 0.975),
+                             t_mean = mean(t_beta0),
+                             t_p2 = quantile(t_beta0, 0.025),
+                             t_p97 = quantile(t_beta0, 0.975),
+                             dgp_type = paste("DGP", .y),
+                             prop_reject0 = sum(reject_0)/n()*100,
+                             prop_rejectb0 = sum(reject_b0)/n()*100
+                         )) %>%
+    select(dgp_type, se_type, df, everything())
+
+table_summary %>%
+    pivot_wider(
+        names_from = df,
+        values_from = estimate_mean:prop_rejectb0
+    ) %>%
+    select(dgp_type, se_type, contains("28"), everything()) %>%
+    mutate(
+         se_type = factor(se_type, levels = c("iid", "HC2"),
+                          labels = c("Classical", "Robust")),
+         across(2:13, ~round(.x, 3))
+    ) %>%
+    arrange(dgp_type, se_type) %>%
+    as_grouped_data(groups = "dgp_type") %>%
+    flextable()%>%
+    set_header_labels(dgp_type = "Simulation", 
+                      se_type = "SE estimation", 
+                      estimate_mean_28 = "Mean",
+                      estimate_p2_28 = "2.5 percentile", 
+                      estimate_p97_28 = "97.5 percentile",
+                      t_mean_28 = "Mean",
+                      t_p2_28 = "2.5 percentile", 
+                      t_p97_28 = "97.5 percentile",
+                      prop_reject0_28 = "Reject b=0",
+                      prop_rejectb0_28 = "Type 1 Error",
+                      estimate_mean_198 = "Mean",
+                      estimate_p2_198 = "2.5 percentile", 
+                      estimate_p97_198 = "97.5 percentile",
+                      t_mean_198 = "Mean",
+                      t_p2_198 = "2.5 percentile", 
+                      t_p97_198 = "97.5 percentile",
+                      prop_reject0_198 = "Reject b=0",
+                      prop_rejectb0_198 = "Type 1 error") %>%
+    add_header_row(values = c("","Estimate", "t-statistic", "", "Estimate", "t-statistic",""), colwidths = c(2, 3, 3, 2, 3, 3, 2))%>%
+    add_header_row(values = c("","Sample size 30", "Sample size 200"), colwidths = c(2, 8, 8)) %>%
+     align(i = 1:3, j = NULL, align = "center", part = "header") %>%
+    set_caption("Summary Statistics and Error Rates of Simulations")
+```
+
+## Reflect
+
+**1** If measurement biases our OLS estimates, it must violate at least one of our assumptions. Which assumption(s) does it violate?
+
+Based on the type of measurement bias, it can violate the homoskedasticity of residuals and and conditional exogeneity assumptions.  
+
+**2** Which, if any, of the issues does "more data" (*big data*—bigger sample size) help? Justify your answer with your simulation results and any theory/intuition that help.
+
+If errors are not normally distributed, then with more data, we can get the correct standard errors due to Central Limit Theorem. However, measurement issues can't be resolved with big data. In the table, we can see that in both DGP 1 and 2, the type 1 error rate is between 5-7%. But, when measurement error is introduced, irrespective of the type, the type 1 error rate for H0: beta = 4, is close to 100%. In both DGP 3 and 4, we can still detect a positive relationship between w and y, though the estimate has downward biased. However, in DGP5, the direction of the relationship is also reversed given the extreme measurement error.   
+
+**3** How reasonable are the assumptions behind "classical" measurement error? Briefly explain your answer.
+
+I think the assumption behind 'classical' measurement error depends on a case-by-case basis. In validated measures, it may be reasonable to think that there is random and uncorrelated noise in the independent variable. In other cases, there assumption might be very strong. 
+
+

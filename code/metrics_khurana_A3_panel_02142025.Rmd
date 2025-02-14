@@ -204,6 +204,7 @@ generate_hist(estimate_df,
               outcome = estimate)
 
 ```
+
 The estimate of the mean is exactly identical. 
 
 <br><br>
@@ -216,6 +217,7 @@ The estimate of the mean is exactly identical.
 generate_hist(estimate_df,
               outcome = std.error)
 ```
+
 
 The estimates and standard errors (clustered at individual level) are exactly identical.
 

@@ -1,0 +1,334 @@
+---
+title: "Take-home final"
+subtitle: "EC 607"
+author: "Havisha Khurana"
+editor:
+  render-on-save: true
+format:
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+    theme: cosmo
+---
+
+```{r}
+library(dagitty)
+library(ggdag)
+library(tidyverse)
+library(grid)
+library(broom)
+library(flextable)
+library(fixest)
+```
+
+
+## A simulation 
+
+**DGP** We will start by setting up a DGP for a two-stage least squares simulation.
+
+-   There are 4 types of people in the population: $a, b, c, d$;
+-   The groups are equally represented in the population;
+-   We're interested in the effect of a binary treatment $D$;
+-   Treatment effects vary by group: $\tau_a=0$, $\tau_b=1$, $\tau_c=2$, $\tau_d=3$;
+-   We have three possible instruments for $D$. Each is binary (with 50% chance of being equal to $1$) and affects a specific group.
+    -   $Z_1=1$ increases the probability of treatment for group $a$ from 0.1 to 0.5;
+    -   $Z_2=1$ increases the probability of treatment for group $b$ from 0.3 to 0.6;
+    -   $Z_3=1$ increases the probability of treatment for group $c$ from 0.2 to 0.8.
+    -   For group $d$, the probability of treatment is 0.7.
+
+Finally, our outcome is $$
+  Y_i = \alpha + \tau_{g(i)} D_i + \gamma Z_{3i} + w_i + u_i
+$$ where
+
+-   $\alpha = 1$, $\gamma=1$;
+-   $g(i)$ represents individual $i$'s group;
+-   $w_i\sim N(0,1)$ and $u_i\sim N(0,1)$.
+
+**2.01 (2.5 pts) Using the definition of the DGP above, draw a DAG.**
+
+Below are 4 DAGs for each group in the population.
+
+```{r, warning = FALSE}
+simulation_dags <- function(instrument, group){
+  group_dags <- dagify("Y" ~ "D",
+  "Y" ~ "U",
+  "D" ~ "U",
+  as.formula(paste0("D ~", instrument)),
+  exposure = "D",
+  outcome = "Y",
+  coords = tibble(
+    name = c("Y", "D", "U", instrument),
+    x = c(1, 0, 1/2, -1),
+    y = c(0, 0, sqrt(3)/2, 0)
+  )) %>%
+tidy_dagitty() %>%
+    mutate(color = ifelse(name == "U", "Unobserved", "Observed"))
+
+  plot_dag <- group_dags %>%
+  filter(name != "NA") %>%
+  ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_dag_point(aes(color = color), size = 10, show.legend = FALSE) +
+  geom_dag_edges() +
+  geom_dag_text(color = "black", size = 3) + 
+  labs(color = "",
+       title = paste0("DAG for relationship between D and Y for group ", group))+
+  theme_dag() +
+    coord_equal()
+  
+return(plot_dag)    
+}
+
+simulation_dags("Z1", "A")
+simulation_dags("Z2", "B")
+groupc_dag <- dagify("Y" ~ "D",
+  "Y" ~ "U",
+  "D" ~ "U",
+  "D" ~ "Z3",
+  "Y" ~ "Z3",
+  exposure = "D",
+  outcome = "Y",
+  coords = tibble(
+    name = c("Y", "D", "U", "Z3"),
+    x = c(1, 0, 1/2, -1/2),
+    y = c(0, 0, sqrt(3)/2, -sqrt(3)/2)
+  )) %>%
+tidy_dagitty() %>%
+    mutate(color = ifelse(name == "U", "Unobserved", "Observed")) %>%
+  filter(name != "NA") %>%
+  ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_dag_point(aes(color = color), size = 10, show.legend = FALSE) +
+  geom_dag_edges() +
+  geom_dag_text(color = "black", size = 3) + 
+  labs(color = "",
+       title = paste0("DAG for relationship between D and Y for group C"))+
+  theme_dag() +
+    coord_equal()
+ 
+groupc_dag
+
+simulation_dags("NA", "D")
+```
+
+**2.02 (5 pts) Using the DAG, explain which---if any---of our three instruments is valid.**
+
+I think Z1 and Z2 are valid instruments though they will have a different LATE estimate given that each of them have a separate group of compliers. Z3 is not a valid instrument as it affects the outcome directly (used to calculate Y), thus violating the exclusion criteria. Also, treatment for group D is endogeneous and we'll not be able to recover that using the IV strategy, meaning our estimate may be downward biased.
+
+**2.03 (5 pts) Calculate the ATE. (I want a number.)**
+
+Since all 4 groups are equally representative in the sample, and groups have different effects, the ATE is the weighted average of the treatment effect for each group.
+
+I.e.,
+
+$\frac{1}{4}*(0 + 1 + 2 + 3) = \frac{6}{4} = 1.5$
+
+**2.04 (2.5 pts) Calculate the LATE for** $Z_1$. **(I want a number.)**
+
+Since Z1 only explains treatment take-up in Group A, and since IV is a consistent estimator, the LATE estimate using Z1 as an instrument should be 0.
+
+**2.05 (30 pts) Run a simulation that shows the distribution of two-stage least squares estimates for the treatment effect from the following estimation strategies:**
+
+-   Plain OLS: Regress $Y$ on $D$
+-   2SLS~1~: Insturment $D$ with $Z_1$
+-   2SLS~2~: Insturment $D$ with $Z_2$
+-   2SLS~3~: Insturment $D$ with $Z_3$
+-   2SLS~4~: Insturment $D$ with $Z_1 + Z_2$
+-   2SLS~5~: Insturment $D$ with $Z_1 + Z_2 + Z_3$
+
+Each sample should have 1,000 individuals. You should run a bunch of iterations.
+
+*Hint:* The `rbinom()` function is great for generating random binary variables. The `sample()` function works nicely for drawing randomly from a vector.
+
+```{r}
+# Function to generate one simulated data
+generate_simulation_dgp <- function(seed){
+
+set.seed(seed)
+    
+alpha <- 1
+gamma <- 1
+
+simulation_dgp <- tibble(
+    # assign group with equal probability
+    group = sample(c("a", "b", "c", "d"), 
+                   1000, replace = TRUE),
+    # create equally probable values of instrument
+    Z1 = rbinom(n = 1000, size = 1, prob = 0.5),
+    Z2 = rbinom(n = 1000, size = 1, prob = 0.5),
+    Z3 = rbinom(n = 1000, size = 1, prob = 0.5),
+    # record ITE treatment effect for group
+    ITE = case_when(
+        group == "a" ~ 0,
+        group == "b" ~ 1,
+        group == "c" ~ 2,
+        group == "d" ~ 3,
+    ),
+    # random noise
+    w = rnorm(n = 1000),
+    # random noise
+    u = rnorm(n = 1000)) %>%
+    rowwise() %>%
+    mutate(
+        # assign treatment probabilistically based on instrument and group indicators
+        D = case_when(
+        Z1 == 1 & group == "a" ~ rbinom(1,1,0.5),
+        Z1 == 0 & group == "a" ~ rbinom(1,1,0.1),
+        Z2 == 1 & group == "b" ~ rbinom(1,1,0.6),
+        Z2 == 0 & group == "b" ~ rbinom(1,1,0.3),
+        Z3 == 1 & group == "c" ~ rbinom(1,1,0.8),
+        Z3 == 0 & group == "c" ~ rbinom(1,1,0.2),
+        group == "d" ~ rbinom(1,1,0.7)),
+        
+        # actual outcome for group based on treatment and ite 
+    realized_y = D*ITE,
+    
+    # observed outcome variable in the sample
+    Y = alpha + realized_y + gamma*Z3 + w + u,
+    ) %>%
+    ungroup()
+
+return(simulation_dgp)
+}
+
+# Function to estimate the model and save a dataframe of results
+
+model_estimate <- function(iter, str_formula, deg_free, beta0 = 1.5){
+    
+    df <- generate_simulation_dgp(seed = iter)
+    
+    estimate_df <- feols(fml = as.formula(str_formula),
+                     data = df) %>%
+        tidy() %>%
+        filter(term %in% c("D", "fit_D")) %>%
+        mutate(
+            # record of iteration
+             iteration = iter,
+        # save t-stat for beta = 4
+             t_beta0 = (estimate - beta0)/std.error,
+             t_crit = qt(0.975, df = deg_free),
+               reject_0 = ifelse(p.value < 0.05, 1, 0),
+               reject_b0 = ifelse(abs(t_beta0) > abs(t_crit), 1, 0))
+    
+    return(estimate_df)
+}
+
+# Function to make an estimate plot
+coef_distribution <- function(estimate_df){
+  
+     
+    coef_plot <- ggplot(estimate_df) +
+                    geom_density(aes(x = estimate),
+                                 fill = "cornflowerblue",
+                                 kernel = "epanechnikov", 
+                                 alpha = 0.4)+
+                    geom_vline(xintercept = 1.5, linetype = "dotted", color = "red")+
+                    #facet_grid(df)+
+        labs(x = "Estimate of Beta",
+             caption = "Red line shows the true ATE.")+
+        theme_minimal(12)
+    return(coef_plot)
+}
+```
+
+```{r}
+n_iter = 1000
+est_strat1 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ D", 998))
+
+coef_distribution(est_strat1) +
+    labs(title = "Distribution of estimates from Y ~ D")
+```
+
+```{r}
+est_strat2 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ 1 | D ~ Z1", 997))
+
+coef_distribution(est_strat2) +
+    labs(title = "Distribution of estimates from Y ~ 1 | D ~ Z1")
+```
+
+```{r}
+est_strat3 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ 1 | D ~ Z2", 997))
+
+coef_distribution(est_strat3) +
+    labs(title = "Distribution of estimates from Y ~ 1 | D ~ Z2")
+```
+
+```{r}
+est_strat4 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ 1 | D ~ Z3", 997))
+
+coef_distribution(est_strat4) +
+    labs(title = "Distribution of estimates from Y ~ 1 | D ~ Z3")
+```
+
+```{r}
+est_strat5 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ 1 | D ~ Z1 + Z2", 996))
+
+coef_distribution(est_strat5) +
+    labs(title = "Distribution of estimates from Y ~ 1 | D ~ Z1 + Z2")
+```
+
+```{r}
+est_strat6 <- map_df(1:n_iter, ~ model_estimate(unique(.x), 
+                                                   "Y ~ 1 | D ~ Z1 + Z2 + Z3", 995))
+
+coef_distribution(est_strat6)+
+    labs(title = "Distribution of estimates from Y ~ 1 | D ~ Z1 + Z2 + Z3")
+```
+
+```{r}
+table_summary <- map2_df(list(est_strat1, est_strat2, est_strat3, est_strat4, 
+                              est_strat5, est_strat6),
+                      c(1:6),
+                     ~.x %>%
+                         summarize(
+                             estimate_mean = mean(estimate),
+                             estimate_p2 = quantile(estimate, 0.025),
+                             estimate_p97 = quantile(estimate, 0.975),
+                             t_mean = mean(t_beta0),
+                             t_p2 = quantile(t_beta0, 0.025),
+                             t_p97 = quantile(t_beta0, 0.975),
+                             prop_reject0 = sum(reject_0)/n()*100,
+                             prop_rejectb0 = sum(reject_b0)/n()*100,
+                             est_strat = paste(.y)
+                         ) %>%
+                        select(est_strat, everything())
+                     
+                     )
+
+formula <- c("Y ~ D", "Y ~ 1 | D ~ Z1",
+             "Y ~ 1 | D ~ Z2", "Y ~ 1 | D ~ Z3",
+             "Y ~ 1 | D ~ Z1 + Z2", "Y ~ 1 | D ~ Z1 + Z2 + Z3")
+
+table_summary$formula <- formula
+
+table_summary %>%
+    select(formula, everything()) %>%
+    as_grouped_data(groups = "est_strat") %>%
+    flextable()%>%
+    set_header_labels(est_strat = "Estimate Strategy",
+                      formula = "feols Formula",
+                      estimate_mean = "Mean",
+                      estimate_p2 = "2.5 percentile", 
+                      estimate_p97 = "97.5 percentile",
+                      t_mean = "Mean",
+                      t_p2 = "2.5 percentile", 
+                      t_p97 = "97.5 percentile",
+                      prop_reject0 = "Reject b=0",
+                      prop_rejectb0 = "Type 1 Error"
+                    ) %>%
+    add_header_row(values = c("","Estimate", "t-statistic","Model Performance"), colwidths = c(2, 3, 3, 2))%>%
+    set_caption("Summary Statistics and Error Rates of Simulations") %>%
+    colformat_double(digits = 3)
+```
+
+**2.06 (2.5 pts) What is the "best" strategy for estimating a treatment effect here? Explain why it's the best.**
+
+Looking at the summary table, in most configurations, we are able to recover the null or positive impact of the treatment, especially for the compliers of the given treatment. In my opinion, using Z1, Z2, or Z1 + Z2 are all good strategies for estimating the treatment effect since we are able to recover the true value of the treatment effect for the compliers.
+
+**2.07 (2.5 pts) What is the "worst" strategy for estimating a treatment effect here? Explain why it's the worst.**
+
+I think using Z3 as the only instrument is the "worst" strategy as that would lead us to believe that the treatment had very large effect on the outcome. However, in reality, Z3 is not a valid instrument since it doesn't meet the exclusion criteria.
