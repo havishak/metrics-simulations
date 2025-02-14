@@ -1,0 +1,284 @@
+---
+title: "A5: Estimators - 2" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
+---
+
+
+**Part 1.** Code up a DGP in which there are $n_t$ observations of $n_i$ individual economic agents (_i.e._, an $n_i \times n_t$ panel). Within this panel, allow some but not all $i$ to be treated. For now, assume that treatment falls in the middle of the time series, at the same $t$ for each treated unit&mdash;once treatment arrives, let's have treatment stay on for the rest of the time series (for now, anyway). Likewise, have all $i$ trend similarly through the time series. (_You should recognize that this is all sounding fairly well behaved&mdash;the sort of environment in which we would expect to be able to identify the causal parameter._)
+
+```{r}
+library(estimatr)
+library(tidyverse)
+```
+
+
+**The DGP:**
+
+``` {r, echo=T, eval=T}
+
+# setting time and individual parameters
+n_t <- 20
+n_i <- 20
+
+# description of parameters
+# difference between treatment and control group: beta_x
+# diff between treated and untreated period: beta_tr
+# effect of treatment in treated period: beta_xtr = 1
+# effect of time/year - linear: beta_t = 0
+# heterogeneous effect of time in treated period: beta_ttr = 0
+
+simulate_panel <- function(seed = 1, n_t, n_i,
+                           beta_x = 1, beta_tr = 0, beta_xtr = 1,
+                           beta_t = 0, beta_ttr = 0){
+  
+cross <- tibble(
+    i = 1:n_i,
+    # assignment to treatment
+    x = rep(0:1, each = n_i/2),
+    # length of the panel
+    t_length = n_t,
+    # individual-level error term
+    ei = rnorm(length(1:n_i), 0, 1)
+)
+
+year <- tibble(
+    t = 1:n_t,
+    # year-level error term
+    et = rnorm(length(1:n_t), 0, 1)
+)
+
+panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
+  left_join(year, by = "t") %>%
+  mutate(
+    eit = rnorm(length(1:(n_i*n_t)), 0, 1),
+    tr = ifelse(t>=n_t/2, 1, 0),
+    xtr = x*tr,
+    # without individual and time contributions
+    y_0 = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + eit,
+    # with individual level errors
+    y_i = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + eit + ei,
+    # with only time level errors
+    y_t = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + et + eit,
+    # with individual and time level errors
+    y_it = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + eit + ei + et
+  )
+
+return(panel)
+}
+
+```
+
+
+**Part 2:** Plot a representative iteration of the above DGP, clearly demonstrating (i) where treatment falls, (ii) with colour, which observations are part of the treatment group and which are part of the control groups, (iii) with lines, the path of each contributing unit's outcome over time, and (iv) the average among treated and control units, before and after treatment. (_I'm asking for the classic DiD plot, showing trends and any level shift around the arrival of treatment._)
+
+
+
+``` {r, echo=T, eval=T}
+
+rep_panel <- simulate_panel(seed = 5, n_t = n_t, n_i = n_i)
+
+gen_did_plot <- function(df, y_outcome, caption){
+  
+  plot <- ggplot(df, aes(x = t, y = {{y_outcome}}, color = factor(x))) +
+  geom_point(alpha = 0.2, size = 1) +
+  geom_line(aes(group = i), alpha = 0.2) +
+  geom_smooth(data = filter(df, t < 10), method = "lm") +
+  geom_smooth(data = filter(df, t > 9), method = "lm") +
+  labs(
+    x = "Time",
+    y = "Outcome",
+    color = "Treatment Group",
+    caption = caption
+  ) +
+  scale_x_continuous(breaks = 1:20)+
+  geom_vline(aes(xintercept = 9.5), color = "darkred", linetype = "dotted")+
+  annotate(geom = "text", x = 9.1, y = 14, label = "Time of reatment",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  scale_color_manual(values = rev(RColorBrewer::brewer.pal(4, "Dark2"))) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+  
+  plot
+}
+
+gen_did_plot(rep_panel, y_0, caption = "No time and individual error terms in y.")
+gen_did_plot(rep_panel, y_i, caption = "Only individual error terms in y.")
+gen_did_plot(rep_panel, y_t, caption = "Only time error terms in y.")
+gen_did_plot(rep_panel, y_it, caption = "Both individual and time error terms in y.")
+```
+
+
+**Part 3.** Simulate this DGP many times, estimating the treatment parameter twice with each iteration&mdash;once with a difference-in-differences (DiD) model and once with a two-way fixed effects (TWFE) model. Plot the distributions from these two approaches in one plot, thereby demonstrating any difference in $\hat\beta$ across DiD and TWFE approaches.
+
+
+
+**The simulation:**
+
+``` {r, echo=T, eval=T}
+
+# Number of iterations
+n_iter <- 100
+
+# List of dgp
+dgp_list <- map(1:n_iter, ~simulate_panel(seed = .x, n_t = n_t, n_i = n_i))
+
+# Save estimates in dgp - assuming that clusters are correctly specified
+
+dgp_est <- function(seed, dgp_df){
+  
+  # for y_0 where no time and individual error terms
+  # not clustering
+  est_y0_did <-  lm_robust(y_0 ~ x + tr + xtr, data = dgp_df) %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    ) 
+  
+  est_y0_tw <- lm_robust(y_0 ~ xtr + as.factor(t) + as.factor(i), 
+          data = dgp_df)  %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+  # for y_i 
+  est_yi_did <-  lm_robust(y_i ~ x + tr + xtr, data = dgp_df) %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+  est_yi_tw <- lm_robust(y_i ~ xtr + as.factor(t) + as.factor(i), 
+          data = dgp_df)  %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+    # for y_t 
+  est_yt_did <-  lm_robust(y_t ~ x + tr + xtr, data = dgp_df) %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+  est_yt_tw <- lm_robust(y_t ~ xtr + as.factor(t) + as.factor(i), 
+          data = dgp_df)  %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+      # for y_it 
+  est_yit_did <-  lm_robust(y_it ~ x + tr + xtr, data = dgp_df) %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+  est_yit_tw <- lm_robust(y_it ~ xtr + as.factor(t) + as.factor(i), 
+          data = dgp_df)  %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    )
+  
+  estimates <- rbind(est_y0_did, est_yi_did,
+                     est_yt_did, est_yit_did) %>%
+    mutate(type = "DiD") %>%
+    rbind(rbind(est_y0_tw, est_yi_tw, est_yt_tw, est_yit_tw) %>%
+            mutate(type = "TWFE")) %>%
+    mutate(seed = seed)
+  
+  return(estimates)
+}
+
+
+estimate_df <- map_df(1:length(dgp_list),
+                      ~dgp_est(seed = .x, dgp_df = dgp_list[[.x]]))
+
+```
+
+
+
+**Visualization of the result:**
+
+The distribution of beta_estimates are identical.
+
+``` {r, echo=T, eval=T}
+estimate_df %>%
+  mutate(
+    error_str = factor(outcome,
+                           levels = c("y_0", "y_i", "y_t", "y_it"),
+                           labels = c("e_it",
+                                      "e_i and e_it",
+                                      "e_t and e_it",
+                                      "e_i, e_t, and e_it")
+  )) %>%
+ggplot(data = ., aes(x = estimate, fill = type)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(data =. %>% group_by(error_str, type) %>% summarize(mean = mean(estimate)), aes(xintercept = mean, color = type)) +
+  facet_wrap(~error_str) + 
+  theme_classic() +
+  labs(
+    x = "Beta estimate",
+    y = "",
+    title = "Comparing DiD and TWFE beta estimates with different error structure",
+    fill = "Model Specification",
+    caption = paste0("From ",n_iter," iterations of the simulation"))+
+  scale_fill_manual(values = RColorBrewer::brewer.pal(3, "Dark2")) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(3, "Dark2")) +
+    guides(color = "none")
+
+```
+
+
+**Part 4.** Plot the distributions of standard-error estimates together in one plot, thereby demonstrating any difference in the precision across DiD and TWFE approaches.
+
+
+The distribution of std_error are identical when there is only e_it error part. However, there is differences in standard errors when the error specification changes - generally smaller in TWFE than in DiD. If I were to cluster Standard Errors (also tried), the distribution of standard errors are almost identical.
+
+``` {r, echo=T, eval=T}
+estimate_df %>%
+  mutate(
+    error_str = factor(outcome,
+                           levels = c("y_0", "y_i", "y_t", "y_it"),
+                           labels = c("e_it",
+                                      "e_i and e_it",
+                                      "e_t and e_it",
+                                      "e_i, e_t, and e_it")
+  )) %>%
+ggplot(data = ., aes(x = std.error, fill = type)) +
+  geom_density(alpha = 0.5) +
+   geom_vline(data =. %>% group_by(error_str, type) %>% summarize(mean = mean(std.error)), aes(xintercept = mean, color = type))+
+
+  facet_wrap(~error_str) + 
+  theme_classic() +
+  labs(
+    x = "Beta estimate",
+    y = "",
+    title = "Comparing DiD and TWFE std.error estimates with IID error assumptions",
+    fill = "Model Specification",
+    caption = paste0("From ",n_iter," iterations of the simulation")
+  ) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(3, "Dark2")) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(3, "Dark2")) +
+    guides(color = "none")
+
+
+
+```
+
+
+**Part 5.** You will have found a difference in the standard-error estimates across these two models, and thereby claimed that precision is higher in one environment than in the other on average. Is it true that this systematic variation exists within each iteration (and not just an artifact of some averaging across iterations)?
+
+
+
+
+

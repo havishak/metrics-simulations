@@ -1,23 +1,18 @@
-
-## A3 - Panel simulation / DiD
-
 ---
-
-``` {r, echo=F}
-due_share       = 11
-due_lastcall    = 13
-due_final       = 14
-dueth_share     = scales::ordinal(due_share)
-dueth_lastcall  = scales::ordinal(due_lastcall)
-dueth_final     = scales::ordinal(due_final)
-```
-
-> Due dates: `r due_share` February (share screens in class), `r due_lastcall` February (last call), `r due_final` February (submissions due)
-
+title: "A3: Panel Simulation/DiD" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
 ---
 
 ```{r}
 library(tidyverse)
+library(estimatr)
 ```
 
 
@@ -28,14 +23,16 @@ library(tidyverse)
 **The DGP:**
 
 ``` {r, echo=T, eval=T}
-# Have a crack at this... I can help as we go.
+# description of parameters
+# difference between treatment and control group: beta_x = 1
+# diff between treated and untreated period: beta_tr = 0
+# effect of treatment in treated period: beta_xtr = 1
+# effect of time/year - linear: beta_t = 0
+# heterogeneous effect of time in treated period: beta_ttr = 0
+# effect of cluster-level variable: beta_cx = 0
 
-set.seed(1)
-#setting time and individual parameters
-n_t <- 10
-n_i <- 1000
-n_c <- 40
-
+simulate_panel <- function(seed = 1, n_i, n_c, n_t){
+  
 cross <- tibble(
     i = 1:n_i,
     # assignment to treatment
@@ -62,20 +59,6 @@ year <- tibble(
     et = rnorm(length(1:n_t), 0, 1)
 )
 
-# setting parameters
-# effect of treatment
-beta_x = 0
-# effect of treated period
-beta_tr = 0
-# heterogeneous effect of treatment in treated period
-beta_xtr = 1
-# effect of time/year - linear
-beta_t = 0
-# heterogeneous effect of time in treated period
-beta_ttr = 0
-# effect of cluster-level variable
-beta_cx = 0
-
 panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
   left_join(cluster, by = "c") %>%
   left_join(year, by = "t") %>%
@@ -83,8 +66,22 @@ panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
     eit = rnorm(length(1:(n_i*n_t)), 0, 1),
     tr = ifelse(t>=n_t/2, 1, 0),
     xtr = x*tr,
-    y = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + beta_cx*cx + et + eit + ec
+     # with four error terms and only x and xtr turned on
+    y1 = 10 + 1*x + 0*tr + 1*xtr + 0*t + 0*t*tr + 0*cx + eit + et + ei + ec,
+    # with tr turned on
+    y2 = 10 + 1*x + 1*tr + 1*xtr + 0*t + 0*t*tr + 0*cx + eit + et + ei + ec,
+    # with t turned on
+    y3 = 10 + 1*x + 0*tr + 1*xtr + 1*t + 0*t*tr + 0*cx + eit + et + ei + ec,
+    # with t*tr turned on
+    y4 = 10 + 1*x + 0*tr + 1*xtr + 0*t + 1*t*tr + 0*cx + eit + et + ei + ec,
+    # with cx turned on
+    y5 = 10 + 1*x + 0*tr + 1*xtr + 0*t + 0*t*tr + 1*cx + eit + et + ei + ec,
+    # with all things turned on
+    y6 = 10 + 1*x + 1*tr + 1*xtr + 1*t + 1*t*tr + 1*cx + eit + et + ei + ec
   )
+
+return(panel)
+}
     
 ```
 
@@ -95,32 +92,46 @@ panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
 **Part 2:** Plot a representative iteration of the above DGP, clearly demonstrating (i) where treatment falls and (ii) which observations are part of the treatment group and which are part of the control groups. (_I'm asking for the classic DiD plot, showing trends across time and any level shift induced by treatment._)
 
 ``` {r, echo=T}
-# Code chunk here...
+# setting time, individual, cluster parameters (n)
+n_t <- 20
+n_i <- 100
+n_c <- 10
 
-panel %>%
-  group_by(t, x) %>%
-  summarize(
-    mean_y = mean(y)
-  ) %>%
-ungroup() %>%
-ggplot(aes(x = t, y = mean_y, shape = factor(x))) +
-  geom_line(aes(color = factor(x)))+
-  # geom_line(aes(color = t < 6,linetype = factor(x))) +
-  # geom_line(aes(color = t > 4, linetype = factor(x))) +
-  geom_point() +
-  #scale_color_manual(values = c("transparent", "cornflowerblue")) +
-  scale_y_continuous(limits = c(0, 20)) +
-  scale_x_continuous(breaks = 1:10)+
-  geom_vline(aes(xintercept = 5), color = "darkred", linetype = "dotted")+
-  theme_minimal() +
-  labs(
-    x = "Time point",
-    y = "Mean Outcome",
-    color = "Treatment group"
-  ) +
-  guides(shape = "none")
+panel <- simulate_panel(n_i = n_i, n_c = n_c, n_t = n_t)
 
+gen_did_plot <- function(df, y_outcome, caption){
   
+  plot <- ggplot(df, aes(x = t, y = {{y_outcome}}, color = factor(x))) +
+  geom_line(aes(group = i), alpha = 0.1) +
+  geom_smooth(data = filter(panel, t < n_t/2), method = "lm", linewidth = 1) +
+  geom_smooth(data = filter(panel, t >= n_t/2), method = "lm", linewidth = 1) +
+  labs(
+    x = "Time",
+    y = "Outcome",
+    color = "Treatment Group",
+    caption = paste0(caption,
+                    "\n", max(df$i)," individual-level data for ",max(df$t)," time-periods across ",max(df$c)," clusters.\nMean size of cluster: ",mean(table(df$c)/n_t)
+)
+  ) +
+  scale_x_continuous(breaks = 1:n_t)+
+  geom_vline(aes(xintercept = (n_t-1)/2), color = "darkred", linetype = "dotted")+
+  annotate(geom = "text", x = n_t/2 - 0.8, y = 15, label = "Time of treatment",color = "darkred", angle = 90, size = 3, alpha = 0.7)+
+  scale_color_manual(values = rev(RColorBrewer::brewer.pal(4, "Dark2"))) +
+  theme_classic() +
+  theme(legend.position = "bottom") #+
+    #scale_y_continuous(limits = c(0,20))
+  
+  plot
+}
+
+
+gen_did_plot(panel, y1, caption = "Null case: The beta on x and xtr turned on.")
+gen_did_plot(panel, y2, caption = "The beta on x, xtr, and tr turned on.")
+gen_did_plot(panel, y3, caption = "The beta on x, xtr, and t turned on.")
+gen_did_plot(panel, y4, caption = "The beta on x, xtr, and t*tr turned on.")
+gen_did_plot(panel, y5, caption = "The beta on x, xtr, and cx turned on.")
+gen_did_plot(panel, y6, caption = "The beta on all terms turned on.")
+
 ```
 
 <br><br>
@@ -132,18 +143,68 @@ ggplot(aes(x = t, y = mean_y, shape = factor(x))) +
 **The simulation:**
 
 ``` {r, echo=T}
-# Code chunk here...
-```
+# Number of iterations
+n_iter <- 500
 
-<br><br>
+# List of dgp
+dgp_list <- map(1:n_iter, ~simulate_panel(seed = .x, n_i = n_i, n_c = n_c, n_t = n_t))
+
+dgp_est <- function(seed, dgp_df){
+  
+ estimates <- map_df(
+    c("y1", "y2", "y3", "y4", "y5", "y6"),
+    ~ lm_robust(
+      formula = as.formula(paste0(.x, " ~ x + tr + xtr")),
+      data = dgp_df,
+      se_type = "CR2",
+      clusters = i
+    ) %>%
+      tidy() %>%
+      filter(term == "xtr")
+  ) %>%
+    mutate(seed = seed)
+
+  return(estimates)
+}
+
+
+# get estimates
+estimate_df <- map_df(1:length(dgp_list), ~dgp_est(seed = .x, dgp_df = dgp_list[[.x]]))
+
+```
 
 **Visualization of the result:**
 
 Where $$Y_{it}= \beta_0 + \beta_1X_i + \beta_2T_t + \beta_3X_iT_t + e_{it}~,$$and true $\beta_3=1$:
 
 ``` {r, echo=T}
-# Code chunk here...
+
+generate_hist <- function(df, outcome, x_lab = ""){
+  
+estimate_df %>%
+ggplot(data = ., aes(x = {{outcome}}, fill = outcome)) +
+  geom_density(alpha = 0.5) +
+  theme_classic() +
+  labs(
+    x = x_lab,
+    y = "",
+    title = str_wrap("Comparing DiD estimates on treatment when there are other parameters turned on in the dgp", 80),
+    fill = "Outcome",
+    caption = paste0("From ",n_iter," iterations of the simulation")
+    #subtitle = str_wrap("The average standard error estimate from DiD is smaller than TWFE, except when the error sutructure has only e_t and e_it componenets.", 80)
+  
+    ) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(8, "Dark2")) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(8, "Dark2")) +
+    guides(color = "none")
+}
+
+
+generate_hist(estimate_df,
+              outcome = estimate)
+
 ```
+The estimate of the mean is exactly identical. 
 
 <br><br>
 
@@ -152,13 +213,12 @@ Where $$Y_{it}= \beta_0 + \beta_1X_i + \beta_2T_t + \beta_3X_iT_t + e_{it}~,$$an
 **Part 4.** Demonstrate the implications of $\sigma$ (i.e., on $\hat\beta_3$ and associated standard-error estimates).
 
 ``` {r, echo=T}
-# Code chunk here...
+generate_hist(estimate_df,
+              outcome = std.error)
 ```
 
+The estimates and standard errors (clustered at individual level) are exactly identical.
+
 <br>
-
----
-
-[Glen Waddell](https://glenwaddell.com), `r format(Sys.Date(), "%Y")`
 
 
