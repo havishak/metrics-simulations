@@ -1,0 +1,387 @@
+---
+title: "A6: Event Study" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
+    toc_float: true
+---
+
+## Event Studys
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      error = FALSE)
+```
+
+
+An event study estimates the impact of an event on an outcome over time. The typical difference-in-differences (DiD) style event study is:
+
+An event study can be described by the estimation of the model,
+$$y_{it} = \alpha + \sum_{t~\ne~T-1}\beta_t~(T_{it}=1) + \lambda_{i} + \mu_{t} + e_{it}~,$$
+where $y_{it}$ is the outcome of unit $i$ in period $t$, and $T_{it}$ captures treatment (in period $t$). (In the above notation, the summation is meant to imply that the omitted category is the period immediately prior to the onset of treatment.)
+
+<br>
+
+---
+
+**Part 1.** Simulate a DGP in which treatment is imposed on a fraction of units in a panel. Produce an event study figure that represents the effect of treatment on outcomes.
+
+In terms of target... your event study plot should look something like [this](https://www.dropbox.com/scl/fi/jd12zu7i3w1gwc9cs1bax/A6.png?rlkey=oqdmhdzg6y9et4yza5a139s0v&dl=0).
+
+For canned packages, consider using something like `fixest::feols()` and `iplot::iplot()`. (_Be careful picking up the right interactions if you write your own code._)
+
+
+```{r}
+library(fixest)
+library(tidyverse)
+```
+
+
+**The DGP:**
+
+``` {r}
+
+# setting time and individual parameters
+n_t <- 20
+n_i <- 50
+
+# description of parameters
+# difference between treatment and control group: beta_x
+# diff between treated and untreated period: beta_tr
+# effect of treatment in treated period: beta_xtr = 1
+# effect of time/year - linear: beta_t = 0
+# heterogeneous effect of time in treated period: beta_ttr = 0
+
+simulate_panel <- function(seed = 1,
+                           n_t,
+                           n_i,
+                           treatment_period = n_t/2,
+                           beta_x = 1,
+                           beta_xtr = 1,
+                           beta_tr_t = 0,
+                           beta_tr_c = 0,
+                           beta_t_t = 0,
+                           beta_t_c = 0,
+                           beta_ttr_t = 0,
+                           beta_ttr_c = 0,
+                           beta_pre_t = 0,
+                           beta_pre_c = 0,
+                           pre_t_start = (n_t / 2 - 4),
+                           pre_t_end = (n_t / 2 - 1),
+                           tr_custom_flag = 0,
+                           tr_custom = c(round(quantile(1:n_t))[2:4]),
+                           snip_flag_early = 0,
+                           snip_flag_late = 0,
+                           heterogeneity_flag = 0) {
+  
+  cross <- tibble(
+    i = 1:n_i,
+    # assignment to treatment
+    x = rep(0:1, each = n_i / 2),
+    # length of the panel
+    t_length = n_t,
+    # If treatment early/negative selection
+    t_pre_tr_trend = sample(c(pre_t_start:pre_t_end), n_i, replace = T),
+    # If t is custom
+    tr_custom_t = sample(tr_custom, n_i, replace = T),
+    # custrom treatment effect
+    beta_xtr_custom = sample(c(round(0.75*beta_xtr):round(2*beta_xtr)), n_i, replace = T),
+    # snip at all
+    snip = sample(c(0,1), n_i, replace = T, prob = c(0.5,0.5)),
+    # snip how much
+    snip_early = sample(1:round(quantile(1:n_t)[2]), n_i, replace = T),
+    # snip how much 
+    snip_late = sample(round(quantile(1:n_t)[4]):n_t, n_i, replace = T),
+    ei = rnorm(length(1:n_i), 0, 1)
+  ) %>%
+    # combine snip and snip_early and snip_late
+    mutate(
+      snip_early = snip*snip_early*snip_flag_early,
+      snip_late = ifelse(snip*snip_flag_late == 0, 21, snip_late)) %>%
+    rowwise() %>%
+    # code heterogeneous effect
+    mutate(
+      beta_xtr = ifelse(heterogeneity_flag != 0, beta_xtr_custom, beta_xtr)
+    ) %>%
+    ungroup()
+  
+  year <- tibble(t = 1:n_t, # year-level error term
+                 et = rnorm(length(1:n_t), 0, 1))
+
+
+  panel <- plyr::ddply(cross, ~ i, transform, t = 1:t_length) %>%
+    left_join(year, by = "t") %>%
+    mutate(
+      # error term
+      eit = rnorm(length(1:(n_i * n_t)), 0, 1),
+      # treatment time flag
+      tr = case_when(
+        tr_custom_flag == 0 & t >= treatment_period ~ 1,
+        tr_custom_flag == 0 & t < treatment_period ~ 0,
+        tr_custom_flag == 1 & t >= tr_custom_t ~ 1,
+        tr_custom_flag == 1 & t < tr_custom_t ~ 0
+      ),
+      # treatment pre flag
+      t_pre_tr_trend = case_when(
+        (beta_pre_t != 0 | beta_pre_c != 0) & t < t_pre_tr_trend ~ 0,
+        (beta_pre_t != 0 |
+           beta_pre_c != 0) & t >= t_pre_tr_trend & t < treatment_period ~ 1,
+        (beta_pre_t != 0 |
+           beta_pre_c != 0) &  t >= treatment_period ~ 0,
+        TRUE ~ 0
+      ),
+      xtr = x*tr,
+      # with individual and time level errors
+      # defining separately for treatment and control groups
+      y = ifelse(
+        x == 1,
+        10 + beta_x * x + beta_tr_t * tr + beta_xtr * xtr + beta_t_t *
+          t + beta_ttr_t * (t - treatment_period) * tr + beta_pre_t * t_pre_tr_trend+ eit + ei + et,
+        10 + beta_x * x + beta_tr_c * tr + beta_xtr * xtr + beta_t_c *
+          t + beta_ttr_c * t * tr + beta_pre_c * t_pre_tr_trend + eit + ei + et
+      )
+    ) %>%
+    # remove data points in early or late phases
+    filter(t > snip_early & t < snip_late)
+
+  return(panel)
+  
+}
+
+
+```
+
+```{r}
+gen_did_plot <- function(df, y_outcome, caption = "", factor_color = x, t_length = n_t, treatment_period = n_t/2){
+  
+  plot <- ggplot(df, aes(x = t, y = {{y_outcome}}, color = factor({{factor_color}}))) +
+  geom_point(alpha = 0.2, size = 1) +
+  geom_line(aes(group = i), alpha = 0.2) +
+  geom_smooth(data = filter(df, t < treatment_period), method = "lm") +
+  geom_smooth(data = filter(df, t >= treatment_period), method = "lm") +
+  labs(
+    x = "Time",
+    y = "Outcome",
+    color = "Treatment Group",
+    caption = paste0("Data on ",max(df$i)," indviduals over ",max(df$t)," periods.")
+  ) +
+  scale_x_continuous(breaks = 1:t_length)+
+  geom_vline(aes(xintercept = (treatment_period - 0.5)), color = "darkred", linetype = "dotted")+
+  annotate(geom = "text", x = treatment_period - 1, y = quantile(df$y)[3], label = "Time of Treatment",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  scale_color_manual(values = rev(RColorBrewer::brewer.pal(4, "Dark2"))) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+  
+  plot
+  
+}
+
+```
+
+```{r}
+generate_event_study_estimate_plot <- function(df, t_ref = (n_t/2 - 1), tr_time = n_t/2, subtitle = ""){
+  
+  event_study_estimate_plot <- feols(y ~ i(t,x,ref = t_ref) | i + t, data =df) %>%
+    broom::tidy(., conf.int = TRUE) %>%
+  mutate(
+    time = parse_number(term), # Extract numeric time
+    scaled_time = time - t_ref
+  ) %>%
+  ggplot(aes(x = scaled_time, y = estimate)) +
+  geom_vline(xintercept = (tr_time - t_ref - 0.5), linetype = "dashed", color = "gray50") +  # Treatment line
+  geom_hline(yintercept = 0, linetype = "solid", color = "gray70") +  # Reference line 
+  geom_point(color = "black", size = 1.5) +  # Point estimates
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +  # CI bars
+  annotate("point", x = 0, y = 0, shape = 21, size = 2)+
+  annotate("text", x = (tr_time - t_ref - 1), y = 2, label = "Treatment", color = "gray50", angle = 90)+
+  #scale_x_continuous(breaks = range(.$scaled_time))+
+  labs(
+    title = "Event Study Coefficient Plot",
+    subtitle = subtitle,
+    x = "Time Period",
+    y = "Estimated Coefficient",
+    caption = paste0("Data on ",max(df$i)," indviduals over ",max(df$t)," periods.")
+  ) +
+  theme_classic()
+  
+  return(event_study_estimate_plot)
+}
+```
+
+### **(o)** all assumptions meet... 
+
+```{r}
+panel_well_behaved <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5)
+gen_did_plot(panel_well_behaved,y)
+generate_event_study_estimate_plot(panel_well_behaved,
+                                   subtitle = "Well Behaved")
+```
+
+
+
+**Part 2:** Build into that DGP the following violations, in each case showing event-study plot that results from such a violation.
+
+
+### **(i)** non-parallel trends... 
+
+
+```{r}
+panel_non_parallel <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5,
+                            beta_t_t = 1, beta_t_c = 0.5)
+gen_did_plot(panel_non_parallel,y)
+generate_event_study_estimate_plot(panel_non_parallel,
+                                   subtitle = "Non-parallel trends")
+```
+
+If there are non-parallel trends, we can see the event study estimates in the pre-period being different. 
+
+### **(ii)** parallel pre-treatment trends, with trends diverging in post treatment periods...
+
+
+```{r}
+panel_non_parallel_post <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5,
+                            beta_ttr_t = 0.5, beta_ttr_c = 0)
+gen_did_plot(panel_non_parallel_post,y)
+generate_event_study_estimate_plot(panel_non_parallel_post,
+                                   subtitle = "Non-parallel post trends trends")
+```
+If there are non-parallel trends in the post period, event study estimates seem to be rising in the post-period. 
+
+### **(iii)** an Ashenfelter dip...
+
+
+```{r}
+panel_ashenfelter <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5,
+                            beta_pre_t = -3, beta_pre_c = 0)
+gen_did_plot(panel_ashenfelter,y)
+generate_event_study_estimate_plot(panel_ashenfelter,
+                                   subtitle = "Ashenfelter dip: randomly in the period from -3 to 0")
+generate_event_study_estimate_plot(panel_ashenfelter,
+                                   t_ref = 5,
+                                   subtitle = "Ashenfelter dip: with tp -4 as the reference")
+```
+If there is an Ashenfelter dip, all estimates of other time periods seem to be larger. 
+
+
+### **(iv)** a treatment that is anticipated (in a way that has units "responding" before it arrives)...
+
+
+```{r}
+panel_anticipated <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5,
+                            beta_pre_t = 5, beta_pre_c = 0)
+gen_did_plot(panel_anticipated,y)
+generate_event_study_estimate_plot(panel_anticipated,
+                                   subtitle = "Anticipated treatment: randomly in periods from -3 to 0")
+generate_event_study_estimate_plot(panel_anticipated,
+                                   t_ref = 5,
+                                   subtitle = "Anticipated treatment: with tp -4 as the reference")
+```
+
+If there is an anticipated treatment effect, the reference estimate and treatment estimate don't look different. Plus, the previous year estimates look lower.
+
+
+### **(v)** unbalanced data (in a way that has units missing early or late in the time series)...
+
+
+```{r}
+panel_unbalanced_early <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5, snip_flag_early = 1, snip_flag_late = 0)
+gen_did_plot(panel_unbalanced_early,y)
+
+generate_event_study_estimate_plot(panel_unbalanced_early,
+                                   subtitle = "Unbalanced data: missing early period - part of the sample randomly upto 5 initial periods")
+
+panel_unbalanced_late <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5, snip_flag_early = 0, snip_flag_late = 1)
+gen_did_plot(panel_unbalanced_late,y)
+
+generate_event_study_estimate_plot(panel_unbalanced_late,
+                                   subtitle = "Unbalanced data: missing late period - part of the sample randomly upto 5 later periods")
+
+# generate_event_study_estimate_plot(panel_unbalanced,
+#                                    t_ref = 6,
+#                                    subtitle = "Anticipated treatment")
+```
+
+If missing observation for previous periods, then the standard error estimates are larger.
+
+### **(vi)** among the treated, differential timing in treatment's arrival...
+
+
+```{r}
+panel_differential_time <- simulate_panel(seed = 20,n_t = n_t, n_i = n_i, beta_xtr = 5, tr_custom_flag = 1, beta_t_t = 1, beta_t_c = 1)
+
+panel_differential_time %>%
+  group_by(x*tr_custom_t, t) %>%
+  summarize(mean_y = mean(y)) %>%
+  ggplot(., 
+       aes(x = t, y = mean_y, color = factor(`x * tr_custom_t`), group = factor(`x * tr_custom_t`))) +
+  geom_line(data = panel_differential_time, aes(group = i, y = y), alpha = 0.4, color = "gray80") +
+  geom_point(alpha = 1, size = 1) +
+  geom_line(alpha = 1) +
+  labs(
+    x = "Time",
+    y = "Outcome",
+    color = "Time to treatment",
+    #caption = caption
+  ) +
+  scale_x_continuous(breaks = 1:20)+
+  geom_vline(aes(xintercept = 5.5), color = "darkred", linetype = "dotted")+
+  geom_vline(aes(xintercept = 9.5), color = "darkred", linetype = "dotted")+
+  geom_vline(aes(xintercept = 14.5), color = "darkred", linetype = "dotted")+
+  annotate(geom = "text", x = 5.1, y = 25, label = "Treatment 1",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  annotate(geom = "text", x = 9.1, y = 14, label = "Treatment 2",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  annotate(geom = "text", x = 14.1, y = 14, label = "Treatment 3",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  scale_color_manual(values = rev(RColorBrewer::brewer.pal(4, "Dark2"))) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+
+feols(y ~ i(t,x,ref = 9) | i + t, data =panel_differential_time) %>%
+    broom::tidy(., conf.int = TRUE) %>%
+  mutate(
+    time = parse_number(term), # Extract numeric time
+    scaled_time = time - 9
+  ) %>%
+  ggplot(aes(x = scaled_time, y = estimate)) +
+  # Treatment lines
+  geom_vline(aes(xintercept = -3.5), color = "gray50", linetype = "dotted")+
+  geom_vline(aes(xintercept = 0.5), color = "gray50", linetype = "dotted")+
+  geom_vline(aes(xintercept = 5.5), color = "gray50", linetype = "dotted") +
+    annotate(geom = "text", x = -4, y = 4, label = "Treatment 1",color = "gray60", angle = 90, size = 2.5, alpha = 0.7)+
+  annotate(geom = "text", x = 0, y =4, label = "Treatment 2",color = "gray60", angle = 90, size = 2.5, alpha = 0.7)+
+  annotate(geom = "text", x = 5, y = 4, label = "Treatment 3",color = "gray60", angle = 90, size = 2.5, alpha = 0.7)+
+  geom_hline(yintercept = 0, linetype = "solid", color = "gray70") +  # Reference line 
+  geom_point(color = "black", size = 1.5) +  # Point estimates
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +  # CI bars
+  annotate("point", x = 0, y = 0, shape = 21, size = 2)+
+  #annotate("text", x = (tr_time - t_ref - 1), y = 1.5, label = "Treatment", color = "gray50", angle = 90)+
+  #scale_x_continuous(breaks = range(.$scaled_time))+
+  labs(
+    title = "Event Study Coefficient Plot",
+    subtitle = "Differential Timing of Treatment Arrival",
+    x = "Time Period",
+    y = "Estimated Coefficient"
+  ) +
+  theme_classic()
+ 
+ 
+```
+
+When there is staggered treatment, the set of estimates look consistent over a period and then change.
+
+### **(vii)** among the treated, heterogeneity in the treatment effect (not in arrival, but in magnitude)...
+
+```{r}
+panel_heterogeneous <- simulate_panel(seed = 10,n_t = n_t, n_i = n_i, beta_xtr = 5, heterogeneity_flag = 1)
+gen_did_plot(panel_heterogeneous,y)
+generate_event_study_estimate_plot(panel_heterogeneous,
+                                   subtitle = "Heterogeneous treatment")
+```
+
+If there is heterogeneous treatment effect, there would be more spread around the treatment effect estimate.
