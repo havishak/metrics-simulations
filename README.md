@@ -51,7 +51,7 @@ $Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it + \epsilon_i + \epsilon_t$
 
 ## [Event Studys TWFE with different violations](code/metrics_khurana_A6-event-studies_02212025.Rmd)
 
-Estimation: $y_{it} = \alpha + \sum_{t~\ne~T-1}\beta_t~(T_{it}=1) + \lambda_{i} + \mu_{t} + e_{it}~$
+Estimation: $y_{it} = \alpha + \sum_{t \ne T-1}\beta_t(T_{it}=1) + \lambda_{i} + \mu_{t} + e_{it}$
 
 Violations:
 
