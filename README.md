@@ -37,18 +37,17 @@ DGP: $Y_C \sim \mathcal{N}(0, \mu_C); Y_T \sim \mathcal{N}(1, \mu_T); \mu_T > \m
 
 ## [DiD estimates with other](code/metrics_khurana_A5_02112025.Rmd)
 
-DGP: $Y = \beta_1*X + \beta_2*Tr + \beta_3*X*Tr + \beta_4*T + beta_5*T*Tr + \beta_6*Cx + \epsilon_i + \epsilon_t + \epsilon_c + \epsilon_it$
+DGP: $Y = \beta_1X + \beta_2Tr + \beta_3XTr + \beta_4T + beta_5TTr + \beta_6Cx + \epsilon_i + \epsilon_t + \epsilon_c + \epsilon_it$
 
 ## [Comparing DiD and TWFE estimates with different error structure](code/metrics_khurana_A3_02142025.Rmd)
 
-DGP: $Y = \beta_1*X + \beta_2*Tr + \beta_3*X*Tr + \epsilon_it$
+DGP: $Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it$
 
-$Y = \beta_1*X + \beta_2*Tr + \beta_3*X*Tr + \epsilon_it + \epsilon_i$
+$Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it + \epsilon_i$
 
-$Y = \beta_1*X + \beta_2*Tr + \beta_3*X*Tr + \epsilon_it + \epsilon_t$
+$Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it + \epsilon_t$
 
-$Y = \beta_1*X + \beta_2*Tr + \beta_3*X*Tr + \epsilon_it + \epsilon_i + \epsilon_t$
-
+$Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it + \epsilon_i + \epsilon_t$
 
 ## [Event Studys TWFE with different violations](code/metrics_khurana_A6-event-studies_02212025.Rmd)
 
@@ -56,10 +55,10 @@ Estimation: $y_{it} = \alpha + \sum_{t~\ne~T-1}\beta_t~(T_{it}=1) + \lambda_{i} 
 
 Violations:
 
-- Non-parallel trends
-- Parallel pre-trends and non-parallel post-trends
-- Ashenfelter dip
-- Anticipated treatment
-- Unbalanced data
-- Staggered treatment
-- Heterogeneous treatment
+-   Non-parallel trends
+-   Parallel pre-trends and non-parallel post-trends
+-   Ashenfelter dip
+-   Anticipated treatment
+-   Unbalanced data
+-   Staggered treatment
+-   Heterogeneous treatment
