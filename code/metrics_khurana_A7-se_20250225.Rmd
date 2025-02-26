@@ -1,0 +1,268 @@
+---
+title: "A7: SE Estimation" 
+author: "Havisha Khurana"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: journal
+    highlight: tango
+    toc: true
+    toc_float: true
+---
+
+## SE Estimation
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      error = FALSE)
+```
+
+### Simulating the DGP
+
+**Part 1.** Simulate a DGP in which treatment is imposed on a fraction of units in a panel. Plot a representative iteration of this DGP, clearly demonstrating (i) where treatment falls and (ii) which observations are part of the treatment group and which are part of the control groups. (*I am again asking for the classic DiD plot, showing parallel trends and the level shift induced by treatment.*) Be sure to have noise terms entering though $e_i$, $e_t$, and $e_{it}$, and many cross-sectional units. (*You'll also want to add a lot of variation in i and t, initially.*)
+
+```{r}
+# loading the libraries
+library(fixest)
+library(tidyverse)
+library(broom)
+```
+
+**The DGP:**
+
+```{r}
+
+# setting time and individual parameters
+n_t <- 20
+n_i <- 40
+
+# description of parameters
+# difference between treatment and control group: beta_x
+# diff between treated and untreated period: beta_tr
+# effect of treatment in treated period: beta_xtr = 1
+# effect of time/year - linear: beta_t = 0
+# heterogeneous effect of time in treated period: beta_ttr = 0
+
+simulate_panel <- function(seed = 1, n_t, n_i,
+                           beta_x = 1, beta_tr = 0, beta_xtr = 1,
+                           beta_t = 0, beta_ttr = 0, i_mean = 0, i_sd = 1, t_mean = 0, t_sd = 1, it_mean = 0, it_sd = 1){
+  
+cross <- tibble(
+    i = 1:n_i,
+    # assignment to treatment
+    x = rep(0:1, each = n_i/2),
+    # length of the panel
+    t_length = n_t,
+    # individual-level error term
+    ei = rnorm(length(1:n_i), i_mean, i_sd)
+)
+
+year <- tibble(
+    t = 1:n_t,
+    # year-level error term
+    et = rnorm(length(1:n_t), t_mean, t_sd)
+)
+
+panel <- plyr::ddply(cross, ~i, transform, t = 1:t_length) %>%
+  left_join(year, by = "t") %>%
+  mutate(
+    eit = rnorm(length(1:(n_i*n_t)), it_mean, it_sd),
+    tr = ifelse(t>=n_t/2, 1, 0),
+    xtr = x*tr,
+    # with individual and time level errors
+    y = 10 + beta_x*x + beta_tr*tr + beta_xtr*xtr + beta_t*t + beta_ttr*t*tr + eit + ei + et
+  )
+
+return(panel)
+}
+
+```
+
+```{r, echo=T, eval=T}
+error_sd <- c(1,5,10,20)
+
+gen_did_plot <- function(seed, error_sd, n_i, n_t){
+  
+  df <- simulate_panel(seed = seed, n_t = n_t, n_i = n_i,
+                              i_sd = error_sd, t_sd = error_sd, it_sd = error_sd)
+  
+  plot <- ggplot(df, aes(x = t, y = y, color = factor(x))) +
+  geom_point(alpha = 0.2, size = 1) +
+  geom_line(aes(group = i), alpha = 0.2) +
+  geom_smooth(data = filter(df, t < 10), method = "lm") +
+  geom_smooth(data = filter(df, t > 9), method = "lm") +
+  labs(
+    x = "Time",
+    y = "Outcome",
+    color = "Treatment Group",
+    caption =  paste0("Data on ",max(df$i)," indviduals over ",max(df$t)," periods.\nError normally distributed with a mean of 0 and SD of ", error_sd)
+  ) +
+  scale_x_continuous(breaks = 1:20)+
+  geom_vline(aes(xintercept = 9.5), color = "darkred", linetype = "dotted")+
+  annotate(geom = "text", x = 9.1, y = 14, label = "Time of reatment",color = "darkred", angle = 90, size = 2.5, alpha = 0.7)+
+  scale_color_manual(values = rev(RColorBrewer::brewer.pal(4, "Dark2"))) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+  
+  plot
+}
+
+gen_did_plot(seed = 10, 
+             error_sd = error_sd[1], n_i = n_i, n_t = n_t)
+gen_did_plot(seed = 10, 
+             error_sd = error_sd[2], n_i = n_i, n_t = n_t)
+gen_did_plot(seed = 10, 
+             error_sd = error_sd[3], n_i = n_i, n_t = n_t)
+gen_did_plot(seed = 10, 
+             error_sd = error_sd[4], n_i = n_i, n_t = n_t)
+```
+
+### DiD and TWFE Estimates
+
+**Part 2a:** Using `feols()`, simulate (with multiple iterations) the DiD estimates of treatment, being careful to specify four different approaches to standard-error estimation— iid, allowing for clustering on *i*, *t*, and both *i* and *t* (i.e., twoway clustering). These models should be well identified, as you have not introduced any violations. Plot the distribution of SE estimates across these multiple iterations.
+
+**Part 2b:** Using `feols()`, simulate (with multiple iterations) the TWFE estimates of treatment, being careful to specify four different approaches to standard-error estimation— iid, allowing for clustering on *i*, *t*, and both *i* and *t* (i.e., twoway clustering). These models should be well identified, as you have not introduced any violations. Plot the distribution of SE estimates across these multiple iterations.
+
+**The simulation and Estimates**
+
+```{r}
+
+# Number of iterations
+error_sd <- c(1,5,10,20)
+n_iter <- 200
+parameters <- expand.grid(error_sd, 1:n_iter) %>%
+  rename(
+    "error_sd" = "Var1",
+    "seed" = "Var2"
+  )
+
+# List of dgp
+dgp_list <- map2(parameters$error_sd, 
+                 parameters$seed, 
+                 ~simulate_panel(seed = .y, n_t = n_t, n_i = n_i,
+                                 i_sd = .x, t_sd = .x, it_sd = .x))
+
+# Save estimates in dgp - assuming that clusters are correctly specified
+
+dgp_est <- function(seed, error_sd, dgp_df){
+  
+did_iid <- feols(y ~ factor(x) + tr + xtr, dgp_df, vcov="iid")
+
+did_i <- feols(y ~ factor(x) + tr + xtr, dgp_df, cluster~i)
+
+did_t <- feols(y ~ factor(x) + tr + xtr, dgp_df, cluster~t)
+
+did_it <- feols(y ~ factor(x) + tr + xtr, dgp_df, cluster~i+t)
+
+twfe_iid <- feols(y ~ xtr | i + t, dgp_df, vcov="iid")
+
+twfe_i <- feols(y ~ xtr | i + t, dgp_df, cluster~i)
+
+twfe_t <- feols(y ~ xtr | i + t, dgp_df, cluster~t)
+
+twfe_it <- feols(y ~ xtr | i + t, dgp_df, cluster~i+t)
+  
+  
+estimates <- pmap_dfr(list(list(did_iid, did_i,did_t, did_it,
+                          twfe_iid, twfe_i, twfe_t, twfe_it),
+                      c(rep("DiD", 4), rep("TWFE", 4)),
+                      rep(c("iid", "i", "t", "it"), 2)),
+  ~..1 %>%
+    tidy() %>%
+    filter(
+      term == "xtr"
+    ) %>%
+    mutate(type = ..2,
+           cluster = ..3,
+           seed = seed,
+           error_sd = error_sd)
+)
+  
+  return(estimates)
+}
+
+
+estimate_df <- pmap_dfr(list(parameters$error_sd,
+                        parameters$seed,
+                        dgp_list),
+                      ~dgp_est(seed = ..2, 
+                               error_sd = ..1,
+                               dgp_df = ..3))
+
+```
+
+### Comparison
+
+**Part 3.** Demonstrate the implications of changing the amount of variation entering into the DGP through *i*, *t*, and *it*.
+
+```{r}
+estimate_df %>% 
+  group_by(cluster, type, error_sd) %>%
+  summarize(
+    mean_sd = mean(std.error),
+    ci_low = quantile(std.error, 0.025),
+    ci_high = quantile(std.error, 0.975)
+  ) %>%
+  mutate(cluster = factor(cluster,
+                          levels = c("iid", "i", "t", "it"))) %>%
+  ggplot(aes(x = factor(error_sd), y = mean_sd, color = cluster)) +
+  geom_point(position = position_dodge(width = 0.9)) +
+  geom_errorbar(aes(ymin = ci_low, ymax = ci_high),
+                width = 0.5,position = position_dodge(width = 0.9)) +
+  facet_wrap(~type) +
+  theme_classic() +
+  labs(
+    x = "SD of Error Term",
+    y = "SE Estimate",
+    color = "SE Estimation Strategy",
+    title = "Comapring SE Estimates based on model and clustering specification",
+    caption =  paste0("Data on ",n_i," indviduals over ",n_t,
+                      "\nFrom ",n_iter," iterations of the simulation")
+  ) +
+  theme(
+    legend.position = c(0.7,0.9),
+    legend.direction = "horizontal"
+  ) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(4, "Dark2"))
+```
+
+```{r}
+estimate_df %>%
+  mutate(cluster = factor(cluster,
+                          levels = c("iid", "i", "t", "it"))) %>%
+  ggplot(aes(x = std.error, fill = cluster)) +
+  geom_density(alpha = 0.25) +
+  facet_grid(type ~ error_sd,
+             scales = "free") + 
+  theme_classic() +
+  #scale_y_continuous(limits = c(0,1))+
+  labs(
+    x = "SD estimate",
+    y = "",
+    title = "Distribution of SE Estimates by model and clustering specification",
+    fill = "SE Clustering Specification",
+   caption =  paste0("Data on ",n_i," indviduals over ",n_t,
+                      "\nFrom ",n_iter," iterations of the simulation")) +
+    guides(color = "none") +
+  theme(
+    legend.position = c(0.6,0.9),
+    legend.direction = "horizontal"
+  )+
+  scale_color_manual(values = RColorBrewer::brewer.pal(4, "Dark2")) 
+```
+
+**In DiD**
+
+-   The average SE estimates from iid specification is always bigger and the average SE estimate when clustering at both i and t is always the smallest.
+-   The average SE estimate from clustering at i and clustering at t are close and switch order. Perhaps, if I change the relative error introduced at i and t, thing will look different.
+-   Within same error distribution, the width of the SE distribution remains about the same across clustering specification. Although the distribution around the it specification is visually larger.
+-   When the variation in the error terms (at i, t, and it - all together) increases, the average SE estimate becomes larger and the distribution becomes wider.
+
+**In TWFE**
+
+-   The average SE estimates from all specifications are about the same.
+-   The distribution of SE estimates from iid specification is the narrowest and the distribution of SE estimates from it specification is the widest. The distribution of SE estimates with just i and just t specification are about the same, although the distribution with the i specification is slightly narrow (more i units than t units).
+-   When the variation in error terms increase, the average SE estimate becomes larger and the distribution becomes wider but the rank-order remains the same.

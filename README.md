@@ -62,3 +62,16 @@ Violations:
 -   Unbalanced data
 -   Staggered treatment
 -   Heterogeneous treatment
+
+
+
+## [Comparing DiD and TWFE standard-error estimates with different clustering specification](code/metrics_khurana_A7-se_20250225.Rmd)
+
+DGP: $Y = \beta_1X + \beta_2Tr + \beta_3XTr + \epsilon_it + \epsilon_i + \epsilon_t$
+
+Clustering Specifications:
+
+- iid
+- ~i
+- ~t
+~ i+t
